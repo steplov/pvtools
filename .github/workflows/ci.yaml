@@ -63,6 +63,9 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
+          name: "pvtools ${{ steps.tag_version.outputs.tag }}"
+          tag_name: v${{ steps.tag_version.outputs.tag }}
+          prerelease: ${{ contains(steps.tag_version.outputs.tag, '-') }}
           files: pvtools-${{ steps.tag_version.outputs.tag }}-linux-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
