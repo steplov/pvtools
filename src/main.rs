@@ -10,10 +10,12 @@ mod utils;
 use commands::backup;
 use commands::restore;
 use config::Config;
+use utils::process::ProcessRunner;
 
 pub struct AppCtx {
     pub debug: bool,
     pub cfg: Config,
+    pub runner: ProcessRunner,
 }
 
 #[derive(Parser, Debug)]
@@ -86,9 +88,12 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
+    let runner = ProcessRunner::new();
+
     let ctx = AppCtx {
         debug: cli.debug,
         cfg,
+        runner,
     };
 
     match cmd {

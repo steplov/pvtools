@@ -1,19 +1,20 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::Config;
 use crate::utils::naming::parse_archive_name;
+use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
 use super::{PbsSnapshot, Provider, RestoreItem};
 
-pub struct ZfsRestore<'a> {
+pub struct ZfsRestore<'a, R: Runner> {
     dest_root: String,
     snapshot: Option<&'a PbsSnapshot>,
+    runner: &'a R,
 }
 
-impl<'a> ZfsRestore<'a> {
-    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>) -> Self {
+impl<'a, R: Runner> ZfsRestore<'a, R> {
+    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a R) -> Self {
         let z = cfg
             .zfs
             .as_ref()
@@ -28,6 +29,7 @@ impl<'a> ZfsRestore<'a> {
         Self {
             dest_root,
             snapshot,
+            runner,
         }
     }
 
@@ -37,27 +39,29 @@ impl<'a> ZfsRestore<'a> {
             bail!("not a zfs archive: {archive}");
         }
 
-        // dataset = tank/vm-9999-pv-test.raw
         let dataset = format!("{}/{}", self.dest_root, leaf);
-        let status = Command::new("zfs")
+
+        // check dataset existence
+        let cmd_list = CmdSpec::new("zfs")
             .args(["list", "-H", "-o", "name", &dataset])
-            .status()
+            .stdout(StdioSpec::Null)
+            .stderr(StdioSpec::Null);
+        self.runner
+            .run(&Pipeline::new().cmd(cmd_list))
             .with_context(|| format!("zfs list {dataset}"))?;
-        if !status.success() {
-            bail!("dataset {dataset} not found (zfs list failed)");
-        }
 
         // resolve mountpoint
-        let out = Command::new("zfs")
+        let cmd_get = CmdSpec::new("zfs")
             .args(["get", "-H", "-o", "value", "mountpoint", &dataset])
-            .output()
-            .with_context(|| format!("zfs get mountpoint {dataset}"))?;
-        if !out.status.success() {
-            bail!("failed to resolve mountpoint for dataset {dataset}");
-        }
-        let mountpoint = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            .stdout(StdioSpec::Pipe)
+            .stderr(StdioSpec::Null);
+        let mountpoint = self
+            .runner
+            .run_capture(&Pipeline::new().cmd(cmd_get))
+            .with_context(|| format!("zfs get mountpoint {dataset}"))?
+            .trim()
+            .to_string();
 
-        // For zvols mountpoint == "-" (not a bug, still usable)
         let target = if mountpoint == "-" || mountpoint == "none" {
             PathBuf::from(format!("/dev/zvol/{dataset}"))
         } else {
@@ -68,7 +72,7 @@ impl<'a> ZfsRestore<'a> {
     }
 }
 
-impl<'a> Provider for ZfsRestore<'a> {
+impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
     fn name(&self) -> &'static str {
         "zfs-restore"
     }

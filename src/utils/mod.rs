@@ -1,5 +1,6 @@
 pub mod bins;
 pub mod lock;
+pub mod process;
 
 pub mod time {
     #[inline]
@@ -16,47 +17,6 @@ pub mod time {
         #[test]
         fn epoch_nonzero() {
             assert!(super::current_epoch() > 1_600_000_000);
-        }
-    }
-}
-
-pub mod shell {
-    #[inline]
-    pub fn sh_quote(s: &str) -> String {
-        if s.is_empty() {
-            return "''".to_string();
-        }
-        if !s
-            .bytes()
-            .any(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\'' | b'"' | b'\\'))
-        {
-            return s.to_string();
-        }
-        let mut out = String::from("'");
-        for ch in s.chars() {
-            if ch == '\'' {
-                out.push_str("'\"'\"'");
-            } else {
-                out.push(ch);
-            }
-        }
-        out.push('\'');
-        out
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn simple_no_quote() {
-            assert_eq!(super::sh_quote("abc"), "abc");
-        }
-        #[test]
-        fn space_quoted() {
-            assert_eq!(super::sh_quote("a b"), "'a b'");
-        }
-        #[test]
-        fn quote_quoted() {
-            assert_eq!(super::sh_quote("a'b"), "'a'\"'\"'b'");
         }
     }
 }
@@ -168,27 +128,6 @@ pub mod path {
         #[test]
         fn leaf_root() {
             assert_eq!(super::dataset_leaf("c"), "c");
-        }
-    }
-}
-
-pub mod cmd {
-    use anyhow::{Context, Result, bail};
-    use std::{ffi::OsStr, process::Command};
-
-    pub fn cmd_ok<I, S>(bin: &str, args: I) -> Result<()>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        let st = Command::new(bin)
-            .args(args)
-            .status()
-            .with_context(|| format!("run {bin}"))?;
-        if st.success() {
-            Ok(())
-        } else {
-            bail!("{} exited with {}", bin, st)
         }
     }
 }

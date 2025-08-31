@@ -1,52 +1,40 @@
-use crate::utils::shell::sh_quote;
+use crate::utils::process::{CmdSpec, EnvValue, Pipeline, ProcessRunner, Runner, StdioSpec};
 use anyhow::{Context, Result, bail};
-use std::process::{Command, Stdio};
-use std::{env, ffi::OsString};
 
-#[cfg(test)]
-static PBS_BIN_OVERRIDE: std::sync::OnceLock<OsString> = std::sync::OnceLock::new();
-
-fn pbs_bin() -> OsString {
-    #[cfg(test)]
-    if let Some(p) = PBS_BIN_OVERRIDE.get() {
-        return p.clone();
-    }
-    env::var_os("PVTOOLS_PBS_BIN").unwrap_or_else(|| OsString::from("proxmox-backup-client"))
-}
-
-pub fn ensure(repo: &str, ns: &str, envs: &[(String, String)], dry_run: bool) -> Result<()> {
-    if exists(repo, ns, envs) {
+pub fn ensure(
+    repo: &str,
+    ns: &str,
+    envs: &[(String, EnvValue)],
+    dry_run: bool,
+    runner: &ProcessRunner,
+) -> Result<()> {
+    if exists(repo, ns, envs, runner) {
         tracing::debug!("namespace '{}' exists on {}", ns, repo);
         return Ok(());
     }
 
+    let cmd = CmdSpec::new("proxmox-backup-client")
+        .args(["namespace", "create", ns, "--repository", repo])
+        .envs(envs.to_vec())
+        .stdout(StdioSpec::Inherit)
+        .stderr(StdioSpec::Inherit);
+
     if dry_run {
-        let mut prefix = String::new();
-        if envs.iter().any(|(k, _)| k == "PBS_PASSWORD") {
-            prefix.push_str("PBS_PASSWORD=<redacted> ");
-        }
-        let cmdline = format!(
-            "{}{} {}",
-            prefix,
-            pbs_bin().to_string_lossy(),
-            ["namespace", "create", ns, "--repository", repo]
-                .iter()
-                .map(|a| sh_quote(a))
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
         tracing::info!(
-            "DRY-RUN: namespace '{}' not found on {}; would run:",
+            "DRY-RUN: namespace '{}' not found on {}; would run:\n{}",
             ns,
-            repo
+            repo,
+            cmd.render()
         );
-        tracing::info!("DRY-RUN: {}", cmdline);
         return Ok(());
     }
 
     tracing::info!("namespace '{}' not found on {}, creating…", ns, repo);
-    create(repo, ns, envs)?;
-    if !exists(repo, ns, envs) {
+    runner
+        .run(&Pipeline::new().cmd(cmd))
+        .context("run proxmox-backup-client namespace create")?;
+
+    if !exists(repo, ns, envs, runner) {
         bail!(
             "namespace '{}' still not visible after create on {}",
             ns,
@@ -56,42 +44,21 @@ pub fn ensure(repo: &str, ns: &str, envs: &[(String, String)], dry_run: bool) ->
     Ok(())
 }
 
-pub fn exists(repo: &str, ns: &str, envs: &[(String, String)]) -> bool {
-    let mut cmd = Command::new(pbs_bin());
-    cmd.args(["namespace", "list", "--repository", repo])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
+pub fn exists(repo: &str, ns: &str, envs: &[(String, EnvValue)], runner: &ProcessRunner) -> bool {
+    let cmd = CmdSpec::new("proxmox-backup-client")
+        .args(["namespace", "list", "--repository", repo])
+        .envs(envs.to_vec())
+        .stdout(StdioSpec::Pipe)
+        .stderr(StdioSpec::Null);
 
-    match cmd.output() {
-        Ok(out) if out.status.success() => {
-            let s = String::from_utf8_lossy(&out.stdout);
-            s.lines()
-                .any(|line| line.split_whitespace().any(|tok| tok == ns))
-        }
-        _ => false,
+    match runner.run_capture(&Pipeline::new().cmd(cmd)) {
+        Ok(out) => out
+            .lines()
+            .any(|line| line.split_whitespace().any(|tok| tok == ns)),
+        Err(_) => false,
     }
 }
 
-fn create(repo: &str, ns: &str, envs: &[(String, String)]) -> Result<()> {
-    let mut cmd = Command::new(pbs_bin());
-    cmd.args(["namespace", "create", ns, "--repository", repo])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-    let status = cmd
-        .status()
-        .context("run proxmox-backup-client namespace create")?;
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("namespace create failed with {status}")
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,19 +111,19 @@ exit 1
         let tmp = TempDir::new().unwrap();
         let (bin, state) = install_fake_pbs(&tmp);
 
-        PBS_BIN_OVERRIDE.set(bin.clone().into()).ok();
+        let runner = ProcessRunner::new().with_override("proxmox-backup-client", &bin);
 
         let repo = "dummy-repo";
-        let envs: Vec<(String, String)> = vec![
-            ("PBS_PASSWORD".into(), "sekret".into()),
-            ("PVTOOLS_NS_STATE".into(), state.clone()),
+        let envs: Vec<(String, EnvValue)> = vec![
+            ("PBS_PASSWORD".into(), EnvValue::Secret("sekret".into())),
+            ("PVTOOLS_NS_STATE".into(), EnvValue::Plain(state.clone())),
         ];
 
-        assert!(!exists(repo, "pv", &envs));
+        assert!(!exists(repo, "pv", &envs, &runner));
 
-        ensure(repo, "pv", &envs, false).expect("ensure create ok");
+        ensure(repo, "pv", &envs, false, &runner).expect("ensure create ok");
 
-        assert!(exists(repo, "pv", &envs));
+        assert!(exists(repo, "pv", &envs, &runner));
     }
 
     #[test]
@@ -165,17 +132,16 @@ exit 1
         let tmp = TempDir::new().unwrap();
         let (bin, state) = install_fake_pbs(&tmp);
 
-        PBS_BIN_OVERRIDE.set(bin.clone().into()).ok();
+        let runner = ProcessRunner::new().with_override("proxmox-backup-client", &bin);
 
         let repo = "dummy-repo";
-        let envs: Vec<(String, String)> = vec![
-            ("PVTOOLS_NS_STATE".into(), state.clone()),
-            ("PBS_PASSWORD".into(), "sekret".into()),
+        let envs: Vec<(String, EnvValue)> = vec![
+            ("PVTOOLS_NS_STATE".into(), EnvValue::Plain(state.clone())),
+            ("PBS_PASSWORD".into(), EnvValue::Secret("sekret".into())),
         ];
 
-        // dry-run: печатаем команду, но не создаём
-        ensure(repo, "pv", &envs, true).expect("dry-run ok");
-        assert!(!exists(repo, "pv", &envs));
+        ensure(repo, "pv", &envs, true, &runner).expect("dry-run ok");
+        assert!(!exists(repo, "pv", &envs, &runner));
         assert!(!std::path::Path::new(&state).exists());
     }
 
@@ -185,14 +151,15 @@ exit 1
         let tmp = TempDir::new().unwrap();
         let (bin, state) = install_fake_pbs(&tmp);
 
-        PBS_BIN_OVERRIDE.set(bin.clone().into()).ok();
+        let runner = ProcessRunner::new().with_override("proxmox-backup-client", &bin);
 
         fs::write(&state, "pv\n").unwrap();
 
         let repo = "dummy-repo";
-        let envs: Vec<(String, String)> = vec![("PVTOOLS_NS_STATE".into(), state.clone())];
+        let envs: Vec<(String, EnvValue)> =
+            vec![("PVTOOLS_NS_STATE".into(), EnvValue::Plain(state.clone()))];
 
-        assert!(exists(repo, "pv", &envs));
-        assert!(!exists(repo, "other", &envs));
+        assert!(exists(repo, "pv", &envs, &runner));
+        assert!(!exists(repo, "other", &envs, &runner));
     }
 }

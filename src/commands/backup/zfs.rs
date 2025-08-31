@@ -1,13 +1,14 @@
 use super::{Provider, Volume};
-use anyhow::{Context, Result, bail};
-use std::{path::PathBuf, process::Command};
+use anyhow::{Context, Result};
+use std::path::PathBuf;
 use tracing as log;
 
+use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 use crate::{
     config::{Config, Pbs},
     utils::{
-        bins::ensure_bins, cmd::cmd_ok, dev::wait_for_block, ids::zfs_guids,
-        naming::create_archive_name, path::dataset_leaf, time::current_epoch,
+        bins::ensure_bins, dev::wait_for_block, ids::zfs_guids, naming::create_archive_name,
+        path::dataset_leaf, time::current_epoch,
     },
 };
 
@@ -19,22 +20,24 @@ enum Reject<'a> {
     PvDenied(&'a str),
 }
 
-pub struct ZfsProvider<'a> {
+pub struct ZfsProvider<'a, R: Runner> {
     pools: &'a [String],
     pbs: &'a Pbs,
     run_ts: u64,
-    cleanup: Cleanup,
+    cleanup: Cleanup<'a, R>,
+    runner: &'a R,
 }
 
-impl<'a> ZfsProvider<'a> {
-    pub fn new(cfg: &'a Config) -> Self {
+impl<'a, R: Runner> ZfsProvider<'a, R> {
+    pub fn new(cfg: &'a Config, runner: &'a R) -> Self {
         let z = cfg.zfs.as_ref().expect("[zfs] missing");
 
         Self {
             pools: &z.pools,
             pbs: &cfg.pbs,
             run_ts: current_epoch(),
-            cleanup: Cleanup::default(),
+            cleanup: Cleanup::new(runner),
+            runner,
         }
     }
 
@@ -51,7 +54,7 @@ impl<'a> ZfsProvider<'a> {
     }
 }
 
-impl<'a> Provider for ZfsProvider<'a> {
+impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
     fn name(&self) -> &'static str {
         "zfs"
     }
@@ -62,7 +65,7 @@ impl<'a> Provider for ZfsProvider<'a> {
 
         for pool in self.pools {
             // zfs list -H -t volume -o name,origin -r <pool>
-            let out_txt = Command::new("zfs")
+            let cmd = CmdSpec::new("zfs")
                 .args([
                     "list",
                     "-H",
@@ -73,16 +76,15 @@ impl<'a> Provider for ZfsProvider<'a> {
                     "-r",
                     pool,
                 ])
-                .output()
+                .stdout(StdioSpec::Pipe);
+
+            let out_txt = self
+                .runner
+                .run_capture(&Pipeline::new().cmd(cmd))
                 .with_context(|| format!("zfs list for pool {pool}"))?;
 
-            if !out_txt.status.success() {
-                bail!("zfs list failed for pool {pool}");
-            }
-
-            let s = String::from_utf8_lossy(&out_txt.stdout);
             let guid_map = zfs_guids(pool)?;
-            for line in s.lines() {
+            for line in out_txt.lines() {
                 let mut it = line.split_whitespace();
                 let name = match it.next() {
                     Some(x) => x,
@@ -99,13 +101,15 @@ impl<'a> Provider for ZfsProvider<'a> {
 
                         if dry_run {
                             for op in &ops {
-                                log::info!("[backup] DRY-RUN: {} {}", op.bin, op.args.join(" "));
+                                log::info!("[backup] DRY-RUN: {}", op.render());
                             }
                         } else {
                             for op in &ops {
-                                cmd_ok(op.bin, &op.args)?;
+                                self.runner
+                                    .run(&Pipeline::new().cmd(op.clone()))
+                                    .with_context(|| format!("zfs op on {name}"))?;
                             }
-                            self.cleanup.add(snap, clone.clone());
+                            self.cleanup.add_many([snap, clone.clone()]);
                             wait_for_block(&device)?;
                         }
 
@@ -143,55 +147,54 @@ impl<'a> Provider for ZfsProvider<'a> {
 }
 
 #[derive(Default)]
-struct Cleanup {
-    snaps: Vec<String>,
-    clones: Vec<String>,
+struct Cleanup<'a, R: Runner> {
+    tasks: Vec<CmdSpec>,
+    runner: Option<&'a R>,
 }
 
-impl Cleanup {
-    fn add(&mut self, snap: String, clone: String) {
-        self.snaps.push(snap);
-        self.clones.push(clone);
+impl<'a, R: Runner> Cleanup<'a, R> {
+    fn new(runner: &'a R) -> Self {
+        Self {
+            tasks: Vec::new(),
+            runner: Some(runner),
+        }
+    }
+
+    fn add_many<I: IntoIterator<Item = String>>(&mut self, snaps: I) {
+        for s in snaps {
+            self.tasks
+                .push(CmdSpec::new("zfs").args(["destroy", "-r", &s]));
+        }
     }
 }
 
-impl Drop for Cleanup {
+impl<'a, R: Runner> Drop for Cleanup<'a, R> {
     fn drop(&mut self) {
-        for c in self.clones.drain(..) {
-            let _ = Command::new("zfs").args(["destroy", "-r", &c]).status();
-        }
-        for s in self.snaps.drain(..) {
-            let _ = Command::new("zfs").args(["destroy", "-r", &s]).status();
+        if let Some(r) = self.runner {
+            for cmd in self.tasks.drain(..) {
+                if let Err(e) = r.run(&Pipeline::new().cmd(cmd)) {
+                    log::warn!("cleanup failed: {e}");
+                }
+            }
         }
     }
 }
 
-struct ZfsOp {
-    bin: &'static str,
-    args: Vec<String>,
-}
-
-fn plan_zvol(ds: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<ZfsOp>, String, String) {
+fn plan_zvol(ds: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<CmdSpec>, String, String) {
     let snap = format!("{ds}@{suffix}-{ts}");
     let clone = format!("{ds}-{suffix}-{ts}");
 
     let ops = vec![
-        ZfsOp {
-            bin: "zfs",
-            args: vec!["snapshot".into(), snap.clone()],
-        },
-        ZfsOp {
-            bin: "zfs",
-            args: vec![
-                "clone".into(),
-                "-o".into(),
-                "readonly=on".into(),
-                "-o".into(),
-                "volmode=dev".into(),
-                snap.clone(),
-                clone.clone(),
-            ],
-        },
+        CmdSpec::new("zfs").args(["snapshot", &snap]),
+        CmdSpec::new("zfs").args([
+            "clone",
+            "-o",
+            "readonly=on",
+            "-o",
+            "volmode=dev",
+            &snap,
+            &clone,
+        ]),
     ];
 
     let dev = PathBuf::from(format!("{DEV_PREFIX}{clone}"));

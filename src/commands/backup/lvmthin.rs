@@ -1,14 +1,15 @@
 use super::{Provider, Volume};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::{collections::HashSet, path::PathBuf, process::Command};
+use std::{collections::HashSet, path::PathBuf};
 use tracing as log;
 
+use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 use crate::{
     config::{Config, Pbs},
     utils::{
-        bins::ensure_bins, cmd::cmd_ok, dev::wait_for_block, ids::lvmthin_short8,
-        naming::create_archive_name, time::current_epoch,
+        bins::ensure_bins, dev::wait_for_block, ids::lvmthin_short8, naming::create_archive_name,
+        time::current_epoch,
     },
 };
 
@@ -20,24 +21,27 @@ enum Reject<'a> {
 
 const CLONE_SUFFIX: &str = "pvtools";
 
-pub struct LvmThinProvider<'a> {
+pub struct LvmThinProvider<'a, R: Runner> {
     vgs_set: HashSet<String>,
     pbs: &'a Pbs,
     run_ts: u64,
-    cleanup: Cleanup,
+    cleanup: Cleanup<'a, R>,
+    runner: &'a R,
 }
 
-impl<'a> LvmThinProvider<'a> {
-    pub fn new(cfg: &'a Config) -> Self {
+impl<'a, R: Runner> LvmThinProvider<'a, R> {
+    pub fn new(cfg: &'a Config, runner: &'a R) -> Self {
         let l = cfg
             .lvmthin
             .as_ref()
             .expect("[lvmthin] missing in config (provider disabled)");
+
         Self {
             vgs_set: l.vgs.iter().map(|s| s.trim().to_string()).collect(),
             pbs: &cfg.pbs,
             run_ts: current_epoch(),
-            cleanup: Cleanup::default(),
+            cleanup: Cleanup::new(runner),
+            runner,
         }
     }
 
@@ -55,7 +59,7 @@ impl<'a> LvmThinProvider<'a> {
     }
 }
 
-impl<'a> Provider for LvmThinProvider<'a> {
+impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
     fn name(&self) -> &'static str {
         "lvmthin"
     }
@@ -64,7 +68,7 @@ impl<'a> Provider for LvmThinProvider<'a> {
         ensure_bins(["lvs", "lvcreate", "lvchange", "lvremove"])?;
 
         let mut out = Vec::<Volume>::new();
-        let rows = list_lvmthin().context("run lvs and parse JSON")?;
+        let rows = list_lvmthin(self.runner).context("run lvs and parse JSON")?;
 
         for lv in rows {
             match self.accept_lv(&lv) {
@@ -80,11 +84,13 @@ impl<'a> Provider for LvmThinProvider<'a> {
 
                     if dry_run {
                         for op in &ops {
-                            log::info!("[backup] DRY-RUN: {} {}", op.bin, op.args.join(" "));
+                            log::info!("[backup] DRY-RUN: {}", op.render());
                         }
                     } else {
                         for op in &ops {
-                            cmd_ok(op.bin, &op.args)?;
+                            self.runner
+                                .run(&Pipeline::new().cmd(op.clone()))
+                                .with_context(|| format!("lvmthin op on {name}"))?;
                         }
                         wait_for_block(&device)
                             .with_context(|| format!("wait for {}", device.display()))?;
@@ -114,44 +120,41 @@ impl<'a> Provider for LvmThinProvider<'a> {
     }
 }
 
-#[derive(Default)]
-struct Cleanup {
+struct Cleanup<'a, R: Runner> {
     snaps: Vec<String>,
+    runner: &'a R,
 }
 
-impl Cleanup {
+impl<'a, R: Runner> Cleanup<'a, R> {
+    fn new(runner: &'a R) -> Self {
+        Self {
+            snaps: Vec::new(),
+            runner,
+        }
+    }
+
     fn add(&mut self, snap_fq: String) {
         self.snaps.push(snap_fq);
     }
 }
 
-impl Drop for Cleanup {
+impl<'a, R: Runner> Drop for Cleanup<'a, R> {
     fn drop(&mut self) {
         for s in self.snaps.drain(..) {
-            let _ = Command::new("lvremove").args(["-f", &s]).status();
+            let cmd = CmdSpec::new("lvremove").args(["-f", &s]);
+            let _ = self.runner.run(&Pipeline::new().cmd(cmd));
         }
     }
 }
 
-struct LvmOp {
-    bin: &'static str,
-    args: Vec<String>,
-}
-
-fn plan_lv(vg: &str, lv: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<LvmOp>, String) {
+fn plan_lv(vg: &str, lv: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<CmdSpec>, String) {
     let snap = format!("{lv}-{suffix}-{ts}");
     let snap_fq = format!("{vg}/{snap}");
     let dev_path = PathBuf::from(format!("/dev/{snap_fq}"));
 
     let ops = vec![
-        LvmOp {
-            bin: "lvcreate",
-            args: vec!["-s".into(), "-n".into(), snap.clone(), format!("{vg}/{lv}")],
-        },
-        LvmOp {
-            bin: "lvchange",
-            args: vec!["-K".into(), "-ay".into(), snap_fq.clone()],
-        },
+        CmdSpec::new("lvcreate").args(["-s", "-n", &snap, &format!("{vg}/{lv}")]),
+        CmdSpec::new("lvchange").args(["-K", "-ay", &snap_fq]),
     ];
 
     (dev_path, ops, snap_fq)
@@ -173,8 +176,8 @@ struct LvRow {
     segtype: Option<String>,
 }
 
-fn list_lvmthin() -> Result<Vec<LvRow>> {
-    let out = Command::new("lvs")
+fn list_lvmthin(runner: &dyn Runner) -> Result<Vec<LvRow>> {
+    let cmd = CmdSpec::new("lvs")
         .args([
             "--reportformat",
             "json",
@@ -183,15 +186,12 @@ fn list_lvmthin() -> Result<Vec<LvRow>> {
             "-o",
             "lv_name,vg_name,segtype",
         ])
-        .output()
+        .stdout(StdioSpec::Pipe);
+
+    let out = runner
+        .run_capture(&Pipeline::new().cmd(cmd))
         .context("run lvs")?;
 
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        bail!("lvs failed: {} | stderr: {}", out.status, stderr.trim());
-    }
-
-    let json: LvsJson =
-        serde_json::from_slice(&out.stdout).context("parse lvs json (full list)")?;
+    let json: LvsJson = serde_json::from_str(&out).context("parse lvs json (full list)")?;
     Ok(json.report.into_iter().flat_map(|r| r.lv).collect())
 }

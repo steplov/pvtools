@@ -275,10 +275,10 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        if let Some(ref def) = default_repo {
-            if !repos.contains_key(def) {
-                bail!("default_repo='{}' not found in [pbs.repos]", def);
-            }
+        if let Some(ref def) = default_repo
+            && !repos.contains_key(def)
+        {
+            bail!("default_repo='{}' not found in [pbs.repos]", def);
         }
 
         Ok((repos, default_repo))
@@ -590,7 +590,7 @@ clone_suffix = "pbs"
         );
 
         let err = Config::load(&cfg_path).unwrap_err().to_string();
-        assert!(err.contains("zfs.pools became empty"));
+        assert!(err.contains("zfs.pools must not be empty"));
     }
 
     #[test]

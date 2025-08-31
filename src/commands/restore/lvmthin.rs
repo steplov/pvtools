@@ -1,19 +1,20 @@
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::Config;
 use crate::utils::naming::parse_archive_name;
+use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
 use super::{PbsSnapshot, Provider, RestoreItem};
 
-pub struct LvmthinRestore<'a> {
+pub struct LvmthinRestore<'a, R: Runner> {
     vg: String,
     snapshot: Option<&'a PbsSnapshot>,
+    runner: &'a R,
 }
 
-impl<'a> LvmthinRestore<'a> {
-    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>) -> Self {
+impl<'a, R: Runner> LvmthinRestore<'a, R> {
+    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a R) -> Self {
         let l = cfg
             .lvmthin
             .as_ref()
@@ -25,7 +26,11 @@ impl<'a> LvmthinRestore<'a> {
             .map(|r| r.vg.clone())
             .expect("[lvmthin.restore] missing vg");
 
-        Self { vg, snapshot }
+        Self {
+            vg,
+            snapshot,
+            runner,
+        }
     }
 
     fn resolve_lv_target(&self, archive: &str) -> Result<PathBuf> {
@@ -35,19 +40,21 @@ impl<'a> LvmthinRestore<'a> {
         }
 
         let lv_path = format!("/dev/{}/{}", self.vg, leaf);
-        let status = Command::new("lvs")
+
+        let cmd = CmdSpec::new("lvs")
             .args(["--noheadings", "-o", "lv_name", &lv_path])
-            .status()
+            .stdout(StdioSpec::Null)
+            .stderr(StdioSpec::Null);
+
+        self.runner
+            .run(&Pipeline::new().cmd(cmd))
             .with_context(|| format!("lvs check {lv_path}"))?;
-        if !status.success() {
-            bail!("LV {lv_path} not found (lvs failed)");
-        }
 
         Ok(PathBuf::from(lv_path))
     }
 }
 
-impl<'a> Provider for LvmthinRestore<'a> {
+impl<'a, R: Runner> Provider for LvmthinRestore<'a, R> {
     fn name(&self) -> &'static str {
         "lvmthin"
     }

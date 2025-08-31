@@ -4,17 +4,18 @@ pub mod zfs;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    process::{Command, Stdio},
-};
+use std::{collections::HashMap, path::PathBuf};
 use tracing as log;
 
 use crate::{
     AppCtx,
-    utils::{bins::ensure_bins, lock::LockGuard, shell::sh_quote},
+    utils::{
+        bins::ensure_bins,
+        lock::LockGuard,
+        process::{CmdSpec, EnvValue, Pipeline, Runner, StdioSpec},
+    },
 };
+use ns::ensure as ns_ensure;
 
 #[derive(Args, Debug, Clone)]
 pub struct BackupArgs {
@@ -46,25 +47,25 @@ trait Provider {
 impl BackupArgs {
     pub fn run(&self, ctx: &AppCtx) -> Result<()> {
         ensure_bins(["proxmox-backup-client"])?;
-
         let _lock = LockGuard::try_acquire("pvtool-backup")?;
 
         let repo = ctx.cfg.pbs.repo(self.target.as_deref())?;
         let ns_opt = ctx.cfg.pbs.ns.as_deref();
 
-        let mut cmd_env = Vec::<(String, String)>::new();
+        let mut envs: Vec<(String, EnvValue)> = Vec::new();
         if let Some(ref pw) = ctx.cfg.pbs.password {
-            cmd_env.push(("PBS_PASSWORD".to_string(), pw.clone()));
+            envs.push(("PBS_PASSWORD".to_string(), EnvValue::Secret(pw.clone())));
         }
 
         let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-
         if ctx.cfg.zfs.is_some() {
-            providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg)));
+            providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, &ctx.runner)));
         }
-
         if ctx.cfg.lvmthin.is_some() {
-            providers.push(Box::new(lvmthin::LvmThinProvider::new(&ctx.cfg)));
+            providers.push(Box::new(lvmthin::LvmThinProvider::new(
+                &ctx.cfg,
+                &ctx.runner,
+            )));
         }
 
         let mut volumes: Vec<Volume> = Vec::new();
@@ -84,7 +85,7 @@ impl BackupArgs {
         log_plan(&volumes, repo, ns_opt, &ctx.cfg.pbs.backup_id);
 
         if let Some(ns) = ns_opt {
-            ns::ensure(repo, ns, &cmd_env, self.dry_run)?;
+            ns_ensure(repo, ns, &envs, self.dry_run, &ctx.runner)?;
         }
 
         let mut args: Vec<String> = Vec::new();
@@ -105,29 +106,16 @@ impl BackupArgs {
             args.push(kf.display().to_string());
         }
 
+        let cmd = CmdSpec::new("proxmox-backup-client")
+            .args(args)
+            .envs(envs.clone())
+            .stdout(StdioSpec::Inherit)
+            .stderr(StdioSpec::Inherit);
+
         if self.dry_run {
-            let mut prefix = String::new();
-            if ctx.cfg.pbs.password.is_some() {
-                prefix.push_str("PBS_PASSWORD=<redacted> ");
-            }
-            let cmdline = format!(
-                "{}proxmox-backup-client {}",
-                prefix,
-                args.iter()
-                    .map(|a| sh_quote(a))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-            log::info!("[backup] DRY-RUN: {}", cmdline);
+            log::info!("[backup] DRY-RUN: {}", cmd.render());
             return Ok(());
         }
-
-        let mut cmd = Command::new("proxmox-backup-client");
-        for (k, v) in &cmd_env {
-            cmd.env(k, v);
-        }
-        cmd.args(&args);
-        cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
         let ns_disp = ns_opt.unwrap_or("<root>");
         log::info!(
@@ -136,10 +124,9 @@ impl BackupArgs {
             volumes.len()
         );
 
-        let status = cmd.status().context("run proxmox-backup-client backup")?;
-        if !status.success() {
-            bail!("proxmox-backup-client exited with {}", status);
-        }
+        ctx.runner
+            .run(&Pipeline::new().cmd(cmd))
+            .context("run proxmox-backup-client backup")?;
 
         log::info!("[backup] done");
         Ok(())
@@ -147,12 +134,11 @@ impl BackupArgs {
 }
 
 fn ensure_unique_archive_names(vols: &[Volume]) -> Result<()> {
-    let mut seen: HashMap<&str, &str> = HashMap::new(); // archive -> label
+    let mut seen: HashMap<&str, &str> = HashMap::new();
     for v in vols {
         if let Some(prev) = seen.insert(v.archive.as_str(), v.label.as_str()) {
             bail!(
-                "archive name collision: '{}' from '{}' and '{}'. \
-                 Check provider naming logic (should be unique per source).",
+                "archive name collision: '{}' from '{}' and '{}'",
                 v.archive,
                 prev,
                 v.label

@@ -44,22 +44,22 @@ impl LockGuard {
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        if !dir.exists() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                let mut b = fs::DirBuilder::new();
-                b.recursive(true)
-                    .mode(0o755)
-                    .create(dir)
-                    .with_context(|| format!("create lock dir {}", dir.display()))?;
-            }
-            #[cfg(not(unix))]
-            {
-                fs::create_dir_all(dir)
-                    .with_context(|| format!("create lock dir {}", dir.display()))?;
-            }
+    if let Some(dir) = path.parent()
+        && !dir.exists()
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut b = fs::DirBuilder::new();
+            b.recursive(true)
+                .mode(0o755)
+                .create(dir)
+                .with_context(|| format!("create lock dir {}", dir.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::create_dir_all(dir)
+                .with_context(|| format!("create lock dir {}", dir.display()))?;
         }
     }
     Ok(())

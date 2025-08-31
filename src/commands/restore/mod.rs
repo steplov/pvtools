@@ -7,13 +7,16 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 use tracing as log;
 
 use crate::{
     AppCtx,
-    utils::{bins::ensure_bins, lock::LockGuard, shell::sh_quote},
+    utils::{
+        bins::ensure_bins,
+        lock::LockGuard,
+        process::{CmdSpec, Pipeline, Runner},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -74,7 +77,7 @@ fn build_restore_cmd(
         "restore".to_string(),
         format!("host/{}", snap.backup_id),
         archive.to_string(),
-        "-".to_string(), // always stream to stdout
+        "-".to_string(), // stream to stdout
     ];
     if let Some(ns) = ns {
         pbs.push("--ns".to_string());
@@ -119,7 +122,7 @@ impl RestoreArgs {
             RestorePoint::At(ts)
         };
 
-        let snaps = list_snapshots(repo, ns_opt)?;
+        let snaps = list_snapshots(repo, ns_opt, &ctx.runner)?;
         if snaps.is_empty() {
             bail!("no snapshots found in repo {repo}");
         }
@@ -132,13 +135,19 @@ impl RestoreArgs {
         };
 
         let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-
         if ctx.cfg.zfs.is_some() {
-            providers.push(Box::new(zfs::ZfsRestore::new(&ctx.cfg, Some(snap))));
+            providers.push(Box::new(zfs::ZfsRestore::new(
+                &ctx.cfg,
+                Some(snap),
+                &ctx.runner,
+            )));
         }
-
         if ctx.cfg.lvmthin.is_some() {
-            providers.push(Box::new(lvmthin::LvmthinRestore::new(&ctx.cfg, Some(snap))));
+            providers.push(Box::new(lvmthin::LvmthinRestore::new(
+                &ctx.cfg,
+                Some(snap),
+                &ctx.runner,
+            )));
         }
 
         if self.list {
@@ -147,7 +156,6 @@ impl RestoreArgs {
                 snap.backup_id,
                 snap.backup_time
             );
-
             for p in &providers {
                 let archives = p.list_archives(snap);
                 if !archives.is_empty() {
@@ -193,45 +201,21 @@ impl RestoreArgs {
                 ctx.cfg.pbs.keyfile.as_ref(),
             );
 
+            let cmd_pbs = CmdSpec::new("proxmox-backup-client").args(plan.pbs_args.clone());
+            let cmd_dd = CmdSpec::new("dd").args(plan.dd_args.clone());
+
             if self.dry_run {
-                let pbs_cmd = format!(
-                    "proxmox-backup-client {}",
-                    plan.pbs_args
-                        .iter()
-                        .map(|a| sh_quote(a))
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                log::info!(
+                    "[restore] DRY-RUN: {} | {}",
+                    cmd_pbs.render(),
+                    cmd_dd.render()
                 );
-                let dd_cmd = format!(
-                    "dd {}",
-                    plan.dd_args
-                        .iter()
-                        .map(|a| sh_quote(a))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                );
-                log::info!("[restore] DRY-RUN: {} | {}", pbs_cmd, dd_cmd);
                 continue;
             }
 
-            let mut pbs_proc = Command::new("proxmox-backup-client")
-                .args(&plan.pbs_args)
-                .stdout(Stdio::piped())
-                .spawn()
-                .context("spawn proxmox-backup-client")?;
-
-            let mut dd_proc = Command::new("dd")
-                .args(&plan.dd_args)
-                .stdin(pbs_proc.stdout.take().unwrap())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .context("spawn dd")?;
-
-            let status = dd_proc.wait().context("wait dd")?;
-            if !status.success() {
-                bail!("restore pipeline failed with {status}");
-            }
+            ctx.runner
+                .run(&Pipeline::new().cmd(cmd_pbs).cmd(cmd_dd))
+                .with_context(|| format!("restore pipeline for {}", i.archive))?;
         }
 
         log::info!("[restore] done");
@@ -280,23 +264,28 @@ pub struct PbsFile {
     pub filename: String,
 }
 
-pub fn list_snapshots(repo: &str, ns: Option<&str>) -> Result<Vec<PbsSnapshot>> {
-    let mut cmd = Command::new("proxmox-backup-client");
-    cmd.args(["snapshots", "--repository", repo, "--output-format", "json"]);
+pub fn list_snapshots(
+    repo: &str,
+    ns: Option<&str>,
+    runner: &dyn Runner,
+) -> Result<Vec<PbsSnapshot>> {
+    let mut cmd = CmdSpec::new("proxmox-backup-client").args([
+        "snapshots",
+        "--repository",
+        repo,
+        "--output-format",
+        "json",
+    ]);
     if let Some(ns) = ns {
-        cmd.args(["--ns", ns]);
+        cmd = cmd.args(["--ns", ns]);
     }
 
-    let out = cmd
-        .output()
+    let out = runner
+        .run_capture(&Pipeline::new().cmd(cmd))
         .context("run proxmox-backup-client snapshots")?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        bail!("pbs snapshots failed: {stderr}");
-    }
 
     let snaps: Vec<PbsSnapshot> =
-        serde_json::from_slice(&out.stdout).context("parse PBS snapshots json")?;
+        serde_json::from_slice(out.as_bytes()).context("parse PBS snapshots json")?;
     Ok(snaps)
 }
 
