@@ -1,0 +1,54 @@
+[graph]
+targets = [
+    { triple = "x86_64-unknown-linux-musl" },
+    { triple = "x86_64-apple-darwin" },
+    { triple = "aarch64-apple-darwin" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0"
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+version = "*"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 }
+]
+
+[[licenses.clarify]]
+name = "encoding_rs"
+version = "0.8.30"
+expression = "MIT OR Apache-2.0"
+license-files = [
+    { path = "COPYRIGHT", hash = 0x39f8ad31 }
+]
+
+# TODO: Include internal crates
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+allow = []
+deny = [
+    # Versions containing the binary blob
+    # See: https://github.com/serde-rs/serde/issues/2538
+    { name = "serde_derive", version = ">1.0.171, <1.0.184"}
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

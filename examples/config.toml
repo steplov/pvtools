@@ -1,0 +1,40 @@
+# Example configuration file for pvtools
+# Copy to ./config.toml and adjust values for your environment
+
+[pbs]
+# Path to client-side encryption key (optional, can be empty)
+keyfile       = "./enc.key"
+# Path to a file containing the token (file content = secret without newline)
+password_file = "./token"
+
+# Namespace on Proxmox Backup Server (can be empty)
+ns            = "pv"
+# If empty, defaults to <hostname>-k8s-pv
+backup_id     = ""
+# List of PV name prefixes to include
+pv_prefixes   = ["vm-9999-", "vm-7777-"]
+# Regex of PV names to exclude
+pv_exclude_re = "plex-transcode"
+
+[pbs.repos]
+# Define backup repositories here
+nas     = "root@pam!pve@10.10.0.24:nas-store"
+s3      = "root@pam!pve@10.10.0.24:s3-store"
+offsite = "root@pam!pve@203.0.113.5:offsite-store"
+
+[zfs]
+# List of ZFS pools (array, not a single string)
+pools = ["tank"]
+
+[zfs.restore]
+# Destination root pool for restores
+dest_root = "tank"
+
+[lvmthin]
+# List of volume groups with thinpools
+vgs = ["pve"]
+
+[lvmthin.restore]
+# Destination volume group and thinpool for restores
+vg = "pve"
+thinpool = "data"

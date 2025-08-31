@@ -1,0 +1,42 @@
+version: '3'
+
+vars:
+  BIN: pvtools
+  DIST: dist
+
+tasks:
+  install:
+    desc: "Install zig, cargo-zigbuild, rust targets, cargo-deny (idempotent)"
+    cmds:
+      - cmd: brew install zig
+        ignore_error: true
+      - cmd: cargo install cargo-zigbuild
+        ignore_error: true
+      - cmd: rustup target add x86_64-unknown-linux-musl
+      - cmd: cargo install cargo-deny
+        ignore_error: true
+
+  lint:
+    desc: "rustfmt + clippy (fail on any warning)"
+    cmds:
+      - cargo fmt --all
+      - 'cargo clippy --all-targets --all-features -- -D warnings'
+
+  deny:
+    desc: "cargo-deny policy check"
+    cmds:
+      - cargo deny check
+
+  build:
+    desc: "Build debug musl for x86_64, stage to dist/"
+    cmds:
+      - cmd: bash -lc 'ulimit -n 8192; cargo zigbuild --target x86_64-unknown-linux-musl'
+      - mkdir -p {{.DIST}}
+      - cp target/x86_64-unknown-linux-musl/debug/{{.BIN}} {{.DIST}}/{{.BIN}}-linux-x86_64
+
+  build:release:
+    desc: "Build release musl for x86_64, stage to dist/"
+    cmds:
+      - cmd: bash -lc 'ulimit -n 8192; cargo zigbuild --release --target x86_64-unknown-linux-musl'
+      - mkdir -p {{.DIST}}
+      - cp target/x86_64-unknown-linux-musl/debug/{{.BIN}} {{.DIST}}/{{.BIN}}-linux-x86_64
