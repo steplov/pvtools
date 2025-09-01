@@ -1,7 +1,7 @@
 use super::{Provider, Volume};
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use tracing as log;
 
 use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
@@ -20,6 +20,13 @@ enum Reject<'a> {
 }
 
 const CLONE_SUFFIX: &str = "pvtools";
+
+#[derive(Debug, Clone)]
+struct LvmMeta {
+    vg: String,
+    lv: String,
+    run_ts: u64,
+}
 
 pub struct LvmThinProvider<'a, R: Runner> {
     vgs_set: HashSet<String>,
@@ -64,7 +71,7 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
         "lvmthin"
     }
 
-    fn collect(&mut self, dry_run: bool) -> Result<Vec<Volume>> {
+    fn discover(&self) -> Result<Vec<Volume>> {
         ensure_bins(["lvs", "lvcreate", "lvchange", "lvremove"])?;
 
         let mut out = Vec::<Volume>::new();
@@ -74,34 +81,23 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
             match self.accept_lv(&lv) {
                 Ok(()) => {
                     let name = format!("{}/{}", lv.vg_name, lv.lv_name);
-                    let leaf = &lv.lv_name;
                     let id8 = lvmthin_short8(&lv.vg_name, &lv.lv_name, self.runner)
                         .with_context(|| format!("get lv_uuid short8 for {name}"))?;
-                    let archive = create_archive_name("lvmthin", leaf, &id8)?;
+                    let archive = create_archive_name("lvmthin", &lv.lv_name, &id8)?;
 
-                    let (device, ops, snap_fq) =
-                        plan_lv(&lv.vg_name, &lv.lv_name, CLONE_SUFFIX, self.run_ts);
-
-                    if dry_run {
-                        for op in &ops {
-                            log::info!("[backup] DRY-RUN: {}", op.render());
-                        }
-                    } else {
-                        for op in &ops {
-                            self.runner
-                                .run(&Pipeline::new().cmd(op.clone()))
-                                .with_context(|| format!("lvmthin op on {name}"))?;
-                        }
-                        wait_for_block(&device, self.runner)
-                            .with_context(|| format!("wait for {}", device.display()))?;
-                        self.cleanup.add(snap_fq);
-                    }
+                    let names =
+                        build_lvm_names(&lv.vg_name, &lv.lv_name, CLONE_SUFFIX, self.run_ts);
 
                     out.push(Volume {
                         archive,
-                        device,
+                        device: names.device.clone(),
                         label: format!("lvmthin:{name}"),
                         map_src: format!("/dev/{name}"),
+                        meta: Some(Arc::new(LvmMeta {
+                            vg: lv.vg_name.clone(),
+                            lv: lv.lv_name.clone(),
+                            run_ts: self.run_ts,
+                        })),
                     });
                 }
                 Err(Reject::NotThin) => log::trace!("skip {}: segtype != thin", lv.lv_name),
@@ -117,6 +113,45 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
         }
 
         Ok(out)
+    }
+
+    fn prepare(&mut self, volumes: &[Volume], dry_run: bool) -> Result<()> {
+        ensure_bins(["lvs", "lvcreate", "lvchange", "lvremove"])?;
+        for v in volumes {
+            let meta = match v.meta::<LvmMeta>() {
+                Some(m) => m,
+                None => continue,
+            };
+
+            let names = build_lvm_names(&meta.vg, &meta.lv, CLONE_SUFFIX, meta.run_ts);
+
+            let ops = vec![
+                CmdSpec::new("lvcreate").args([
+                    "-s",
+                    "-n",
+                    &names.snap,
+                    &format!("{}/{}", meta.vg, meta.lv),
+                ]),
+                CmdSpec::new("lvchange").args(["-K", "-ay", &names.snap_fq]),
+            ];
+
+            if dry_run {
+                for op in &ops {
+                    log::info!("[backup] DRY-RUN: {}", op.render());
+                }
+            } else {
+                for op in &ops {
+                    self.runner
+                        .run(&Pipeline::new().cmd(op.clone()))
+                        .with_context(|| format!("lvmthin op on {}/{}", meta.vg, meta.lv))?;
+                }
+                wait_for_block(&names.device, self.runner)
+                    .with_context(|| format!("wait for {}", names.device.display()))?;
+                self.cleanup.add(names.snap_fq);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -147,19 +182,6 @@ impl<'a, R: Runner> Drop for Cleanup<'a, R> {
             }
         }
     }
-}
-
-fn plan_lv(vg: &str, lv: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<CmdSpec>, String) {
-    let snap = format!("{lv}-{suffix}-{ts}");
-    let snap_fq = format!("{vg}/{snap}");
-    let dev_path = PathBuf::from(format!("/dev/{snap_fq}"));
-
-    let ops = vec![
-        CmdSpec::new("lvcreate").args(["-s", "-n", &snap, &format!("{vg}/{lv}")]),
-        CmdSpec::new("lvchange").args(["-K", "-ay", &snap_fq]),
-    ];
-
-    (dev_path, ops, snap_fq)
 }
 
 #[derive(Deserialize)]
@@ -196,4 +218,24 @@ fn list_lvmthin(runner: &dyn Runner) -> Result<Vec<LvRow>> {
 
     let json: LvsJson = serde_json::from_str(&out).context("parse lvs json (full list)")?;
     Ok(json.report.into_iter().flat_map(|r| r.lv).collect())
+}
+
+#[derive(Debug, Clone)]
+struct LvmNames {
+    snap: String,
+    snap_fq: String,
+    device: PathBuf,
+}
+
+#[inline]
+fn build_lvm_names(vg: &str, lv: &str, suffix: &str, ts: u64) -> LvmNames {
+    let snap = format!("{lv}-{suffix}-{ts}");
+    let snap_fq = format!("{vg}/{snap}");
+    let device = PathBuf::from(format!("/dev/{snap_fq}"));
+
+    LvmNames {
+        snap,
+        snap_fq,
+        device,
+    }
 }

@@ -5,6 +5,9 @@ pub mod lock;
 pub mod process;
 
 pub mod time {
+    use anyhow::{Context, Result, anyhow};
+    use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+
     #[inline]
     pub fn current_epoch() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,6 +15,21 @@ pub mod time {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    pub fn fmt_utc(ts: u64) -> Result<String> {
+        let ts = i64::try_from(ts).map_err(|_| anyhow!("unix timestamp doesn't fit into i64"))?;
+        let dt = OffsetDateTime::from_unix_timestamp(ts)?;
+        Ok(dt.format(&Rfc3339)?) // "YYYY-MM-DDTHH:MM:SSZ"
+    }
+
+    pub fn parse_rfc3339_to_unix(s: &str) -> Result<u64> {
+        let dt = OffsetDateTime::parse(s, &Rfc3339)
+            .with_context(|| format!("invalid RFC3339 datetime: {s}"))?
+            .to_offset(UtcOffset::UTC);
+
+        let ts = dt.unix_timestamp(); // i64 секунд
+        u64::try_from(ts).map_err(|_| anyhow!("timestamp is negative: {}", ts))
     }
 
     #[cfg(test)]

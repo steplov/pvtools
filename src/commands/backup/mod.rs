@@ -1,10 +1,6 @@
-pub mod lvmthin;
-mod ns;
-pub mod zfs;
-
 use anyhow::{Context, Result, bail};
-use clap::Args;
-use std::{collections::HashMap, path::PathBuf};
+use clap::{Args, Subcommand};
+use std::{any::Any, collections::HashMap, path::PathBuf, sync::Arc};
 use tracing as log;
 
 use crate::{
@@ -17,13 +13,35 @@ use crate::{
 };
 use ns::ensure as ns_ensure;
 
-#[derive(Args, Debug, Clone)]
-pub struct BackupArgs {
-    #[arg(long)]
-    pub target: Option<String>,
+mod lvmthin;
+mod ns;
+mod zfs;
 
-    #[arg(long)]
-    pub dry_run: bool,
+#[derive(Debug, Args)]
+pub struct BackupArgs {
+    #[command(subcommand)]
+    pub cmd: BackupCmd,
+}
+
+impl BackupArgs {
+    pub fn run(&self, ctx: &AppCtx) -> Result<()> {
+        self.cmd.run(ctx)
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BackupCmd {
+    Run(BackupRunArgs),
+    ListArchives(ListArchivesArgs),
+}
+
+impl BackupCmd {
+    pub fn run(&self, ctx: &AppCtx) -> Result<()> {
+        match self {
+            BackupCmd::Run(args) => args.run(ctx),
+            BackupCmd::ListArchives(args) => args.run(ctx),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -37,14 +55,32 @@ pub struct Volume {
     /// Human-friendly source path to print in the mapping (left side).
     /// For example: "/tank/…/vm-9999-…" for ZFS, or "/dev/<vg>/<lv>" for LVM-thin.
     pub map_src: String,
+    pub meta: Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl Volume {
+    #[inline]
+    pub fn meta<T: 'static>(&self) -> Option<&T> {
+        self.meta.as_deref()?.downcast_ref::<T>()
+    }
 }
 
 trait Provider {
     fn name(&self) -> &'static str;
-    fn collect(&mut self, dry_run: bool) -> Result<Vec<Volume>>;
+    fn discover(&self) -> Result<Vec<Volume>>;
+    fn prepare(&mut self, volumes: &[Volume], dry_run: bool) -> Result<()>;
 }
 
-impl BackupArgs {
+#[derive(Args, Debug)]
+pub struct BackupRunArgs {
+    #[arg(long)]
+    pub target: Option<String>,
+
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+impl BackupRunArgs {
     pub fn run(&self, ctx: &AppCtx) -> Result<()> {
         ensure_bins(["proxmox-backup-client"])?;
         let _lock = LockGuard::try_acquire("pvtool-backup")?;
@@ -71,13 +107,13 @@ impl BackupArgs {
         let mut volumes: Vec<Volume> = Vec::new();
         for p in providers.iter_mut() {
             let mut v = p
-                .collect(self.dry_run)
+                .discover()
                 .with_context(|| format!("collect from provider {}", p.name()))?;
             volumes.append(&mut v);
         }
 
         if volumes.is_empty() {
-            log::info!("nothing to backup (no matching volumes from any provider)");
+            log::info!("nothing to backup");
             return Ok(());
         }
 
@@ -88,6 +124,9 @@ impl BackupArgs {
             ns_ensure(repo, ns, &envs, self.dry_run, &ctx.runner)?;
         }
 
+        for p in providers.iter_mut() {
+            p.prepare(&volumes, self.dry_run)?;
+        }
         let mut args: Vec<String> = Vec::new();
         args.push("backup".to_string());
         for v in &volumes {
@@ -129,6 +168,47 @@ impl BackupArgs {
             .context("run proxmox-backup-client backup")?;
 
         log::info!("[backup] done");
+        Ok(())
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct ListArchivesArgs {
+    #[arg(long)]
+    pub target: String,
+}
+
+impl ListArchivesArgs {
+    pub fn run(&self, ctx: &AppCtx) -> Result<()> {
+        let _lock = LockGuard::try_acquire("pvtool-backup")?;
+        let ns_opt = ctx.cfg.pbs.ns.as_deref();
+
+        let mut providers: Vec<Box<dyn Provider>> = Vec::new();
+        if ctx.cfg.zfs.is_some() {
+            providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, &ctx.runner)));
+        }
+        if ctx.cfg.lvmthin.is_some() {
+            providers.push(Box::new(lvmthin::LvmThinProvider::new(
+                &ctx.cfg,
+                &ctx.runner,
+            )));
+        }
+
+        let mut volumes: Vec<Volume> = Vec::new();
+        for p in providers.iter_mut() {
+            let mut v = p
+                .discover()
+                .with_context(|| format!("discover from provider {}", p.name()))?;
+            volumes.append(&mut v);
+        }
+
+        if volumes.is_empty() {
+            log::info!("nothing to backup");
+            return Ok(());
+        }
+
+        ensure_unique_archive_names(&volumes)?;
+        log_plan(&volumes, "<none>", ns_opt, &ctx.cfg.pbs.backup_id);
         Ok(())
     }
 }

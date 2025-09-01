@@ -17,7 +17,6 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct Pbs {
     pub repos: HashMap<String, String>,
-    pub default_repo: Option<String>,
     pub keyfile: Option<PathBuf>,
     pub password: Option<String>,
     pub ns: Option<String>,
@@ -54,22 +53,16 @@ impl Pbs {
     pub fn repo<'a>(&'a self, sel: Option<&str>) -> Result<&'a str> {
         if let Some(name) = sel {
             return self.repos.get(name).map(|s| s.as_str()).ok_or_else(|| {
-                anyhow!("unknown target '{}'; known: {}", name, self.known_targets())
+                anyhow!(
+                    "unknown target/source '{}'; known: {}",
+                    name,
+                    self.known_targets()
+                )
             });
         }
-        if let Some(def) = &self.default_repo {
-            return self
-                .repos
-                .get(def)
-                .map(|s| s.as_str())
-                .ok_or_else(|| anyhow!("default_repo='{}' not found in [pbs.repos]", def));
-        }
-        if self.repos.len() == 1 {
-            let (_k, v) = self.repos.iter().next().unwrap();
-            return Ok(v.as_str());
-        }
+
         Err(anyhow!(
-            "no target provided and no default_repo set; specify --target <{}>",
+            "no target/source provided; specify --target or --source <{}>",
             self.known_targets()
         ))
     }
@@ -108,8 +101,6 @@ struct RawConfig {
 struct RawPbs {
     #[serde(default)]
     repos: HashMap<String, String>,
-    default_repo: Option<String>,
-
     keyfile: Option<String>,
     password_file: Option<String>,
     ns: Option<String>,
@@ -158,7 +149,7 @@ impl Config {
             .with_context(|| format!("deserialize {}", path.display()))?;
 
         let n = config_helpers::Normalizer { base_dir };
-        let (repos, default_repo) = Self::build_repos(raw.pbs.repos, raw.pbs.default_repo)?;
+        let repos = Self::build_repos(raw.pbs.repos)?;
 
         let keyfile = n.trim_opt(raw.pbs.keyfile).map(|s| n.resolve(&s));
         let password = match n.trim_opt(raw.pbs.password_file).map(|s| n.resolve(&s)) {
@@ -188,7 +179,6 @@ impl Config {
         };
         let pbs = Pbs {
             repos,
-            default_repo,
             keyfile,
             password,
             ns,
@@ -242,10 +232,7 @@ impl Config {
         Ok(Self { pbs, zfs, lvmthin })
     }
 
-    fn build_repos(
-        raw_repos: HashMap<String, String>,
-        default_repo_raw: Option<String>,
-    ) -> Result<(HashMap<String, String>, Option<String>)> {
+    fn build_repos(raw_repos: HashMap<String, String>) -> Result<HashMap<String, String>> {
         if raw_repos.is_empty() {
             bail!("define at least one repository under [pbs.repos]");
         }
@@ -271,17 +258,7 @@ impl Config {
             }
         }
 
-        let default_repo = default_repo_raw
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        if let Some(ref def) = default_repo
-            && !repos.contains_key(def)
-        {
-            bail!("default_repo='{}' not found in [pbs.repos]", def);
-        }
-
-        Ok((repos, default_repo))
+        Ok(repos)
     }
 
     #[inline]
@@ -297,7 +274,6 @@ impl Config {
         #[derive(Serialize)]
         struct PbsOut<'a> {
             repos: BTreeMap<&'a str, &'a str>,
-            default_repo: Option<&'a str>,
             keyfile: Option<String>,
             password: &'static str,
             ns: Option<&'a str>,
@@ -362,7 +338,6 @@ impl Config {
         let out = Out {
             pbs: PbsOut {
                 repos: repos_sorted,
-                default_repo: self.pbs.default_repo.as_deref(),
                 keyfile: self.pbs.keyfile.as_ref().map(|p| p.display().to_string()),
                 password: if self.pbs.password.is_some() {
                     "<redacted>"
@@ -508,36 +483,6 @@ pools      = ["tank", " tank "]
         assert!(re.is_match("test-debug"));
 
         assert_eq!(cfg.zfs.as_ref().unwrap().pools, vec!["tank".to_string()]);
-    }
-
-    #[test]
-    fn single_repo_no_default_ok() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
-
-        let cfg_path = dir.join("config.toml");
-        write(
-            &cfg_path,
-            r#"
-[pbs]
-backup_id = "backup-pv"
-
-[pbs.repos]
-only = "root@pam!pve@192.168.0.24:nas-store"
-
-[zfs]
-pools = ["tank"]
-
-[backup]
-clone_suffix = "pbs"
-"#,
-        );
-
-        let cfg = Config::load(&cfg_path).unwrap();
-        assert_eq!(
-            cfg.pbs.repo(None).unwrap(),
-            "root@pam!pve@192.168.0.24:nas-store"
-        );
     }
 
     #[test]

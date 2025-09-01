@@ -1,6 +1,6 @@
 use super::{Provider, Volume};
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tracing as log;
 
 use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
@@ -18,6 +18,19 @@ const CLONE_SUFFIX: &str = "pvtools";
 enum Reject<'a> {
     NotBase(&'a str),
     PvDenied(&'a str),
+}
+
+#[derive(Debug, Clone)]
+struct ZfsMeta {
+    dataset: String,
+    run_ts: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ZfsNames {
+    snap: String,
+    clone: String,
+    device: PathBuf,
 }
 
 pub struct ZfsProvider<'a, R: Runner> {
@@ -59,7 +72,7 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
         "zfs"
     }
 
-    fn collect(&mut self, dry_run: bool) -> Result<Vec<Volume>> {
+    fn discover(&self) -> Result<Vec<Volume>> {
         ensure_bins(["zfs"])?;
         let mut out = Vec::<Volume>::new();
 
@@ -97,35 +110,24 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
 
                 match self.accept_ds(name, origin) {
                     Ok(()) => {
-                        let (device, ops, snap, clone) = plan_zvol(name, CLONE_SUFFIX, self.run_ts);
-
-                        if dry_run {
-                            for op in &ops {
-                                log::info!("[backup] DRY-RUN: {}", op.render());
-                            }
-                        } else {
-                            for op in &ops {
-                                self.runner
-                                    .run(&Pipeline::new().cmd(op.clone()))
-                                    .with_context(|| format!("zfs op on {name}"))?;
-                            }
-                            self.cleanup.add_many([snap, clone.clone()]);
-                            wait_for_block(&device, self.runner)?;
-                        }
-
                         let leaf = dataset_leaf(name);
                         let id8 = guid_map.get(name).ok_or_else(|| {
                             anyhow::anyhow!("guid not found for dataset {}", name)
                         })?;
                         let archive = create_archive_name("zfs", leaf, id8)?;
 
-                        log::trace!("leaf={leaf:?}, archive={archive:?}");
+                        let names = build_zfs_names(name, CLONE_SUFFIX, self.run_ts);
+                        let device = names.device.clone();
 
                         out.push(Volume {
                             archive,
                             device,
                             label: format!("zfs:{name}"),
                             map_src: format!("/{name}"),
+                            meta: Some(Arc::new(ZfsMeta {
+                                dataset: name.to_string(),
+                                run_ts: self.run_ts,
+                            })),
                         });
                     }
                     Err(Reject::NotBase(orig)) => {
@@ -143,6 +145,49 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
         }
 
         Ok(out)
+    }
+
+    fn prepare(&mut self, volumes: &[Volume], dry_run: bool) -> Result<()> {
+        ensure_bins(["zfs"])?;
+
+        for v in volumes {
+            let meta = match v.meta::<ZfsMeta>() {
+                Some(m) => m,
+                None => continue,
+            };
+
+            let names = build_zfs_names(&meta.dataset, CLONE_SUFFIX, meta.run_ts);
+
+            let ops = vec![
+                CmdSpec::new("zfs").args(["snapshot", &names.snap]),
+                CmdSpec::new("zfs").args([
+                    "clone",
+                    "-o",
+                    "readonly=on",
+                    "-o",
+                    "volmode=dev",
+                    &names.snap,
+                    &names.clone,
+                ]),
+            ];
+
+            if dry_run {
+                for op in &ops {
+                    log::info!("[backup] DRY-RUN: {}", op.render());
+                }
+            } else {
+                for op in &ops {
+                    self.runner
+                        .run(&Pipeline::new().cmd(op.clone()))
+                        .with_context(|| format!("zfs op on {}", &meta.dataset))?;
+                }
+                self.cleanup
+                    .add_many([names.clone.clone(), names.snap.clone()]);
+                wait_for_block(&names.device, self.runner)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -180,23 +225,14 @@ impl<'a, R: Runner> Drop for Cleanup<'a, R> {
     }
 }
 
-fn plan_zvol(ds: &str, suffix: &str, ts: u64) -> (PathBuf, Vec<CmdSpec>, String, String) {
+#[inline]
+fn build_zfs_names(ds: &str, suffix: &str, ts: u64) -> ZfsNames {
     let snap = format!("{ds}@{suffix}-{ts}");
     let clone = format!("{ds}-{suffix}-{ts}");
-
-    let ops = vec![
-        CmdSpec::new("zfs").args(["snapshot", &snap]),
-        CmdSpec::new("zfs").args([
-            "clone",
-            "-o",
-            "readonly=on",
-            "-o",
-            "volmode=dev",
-            &snap,
-            &clone,
-        ]),
-    ];
-
-    let dev = PathBuf::from(format!("{DEV_PREFIX}{clone}"));
-    (dev, ops, snap, clone)
+    let device = PathBuf::from(format!("{DEV_PREFIX}{clone}"));
+    ZfsNames {
+        snap,
+        clone,
+        device,
+    }
 }
