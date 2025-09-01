@@ -1,4 +1,6 @@
 pub mod bins;
+pub mod dev;
+pub mod ids;
 pub mod lock;
 pub mod process;
 
@@ -129,83 +131,5 @@ pub mod path {
         fn leaf_root() {
             assert_eq!(super::dataset_leaf("c"), "c");
         }
-    }
-}
-
-pub mod dev {
-    use anyhow::{Result, anyhow};
-    use std::{
-        path::Path,
-        process::Command,
-        time::{Duration, Instant},
-    };
-    use tracing as log;
-
-    pub fn wait_for_block(dev: &Path) -> Result<()> {
-        wait_for_block_with(dev, Duration::from_secs(5), Duration::from_millis(100))
-    }
-
-    pub fn wait_for_block_with(dev: &Path, timeout: Duration, delay: Duration) -> Result<()> {
-        let start = Instant::now();
-        let mut warned = false;
-
-        while start.elapsed() < timeout {
-            if dev.exists() {
-                return Ok(());
-            }
-            if start.elapsed() > Duration::from_secs(1) && !warned {
-                log::info!("[wait] device {} not ready, waiting…", dev.display());
-                warned = true;
-            }
-            let _ = Command::new("udevadm")
-                .args(["trigger", "--subsystem-match=block", "--action=add"])
-                .status();
-            let _ = Command::new("udevadm").arg("settle").status();
-            std::thread::sleep(delay);
-        }
-
-        Err(anyhow!("device node did not appear: {}", dev.display()))
-    }
-}
-
-pub mod ids {
-    use anyhow::{Context, Result, bail};
-    use std::collections::HashMap;
-    use std::process::Command;
-
-    pub fn zfs_guids(pool: &str) -> Result<HashMap<String, String>> {
-        let out = Command::new("zfs")
-            .args(["get", "-H", "-o", "name,value", "guid", "-r", pool])
-            .output()
-            .with_context(|| format!("zfs get guid -r {pool}"))?;
-
-        if !out.status.success() {
-            bail!("zfs get guid failed for pool {pool}: {}", out.status);
-        }
-
-        let mut map = HashMap::new();
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            let mut it = line.split_whitespace();
-            if let (Some(ds), Some(guid_str)) = (it.next(), it.next()) {
-                let n: u128 = guid_str.trim().parse().unwrap_or(0);
-                let hex = format!("{n:x}");
-                let short = hex.chars().take(8).collect::<String>();
-                map.insert(ds.to_string(), short);
-            }
-        }
-        Ok(map)
-    }
-
-    pub fn lvmthin_short8(vg: &str, lv: &str) -> Result<String> {
-        let out = Command::new("lvs")
-            .args(["--noheadings", "-o", "lv_uuid", &format!("{vg}/{lv}")])
-            .output()
-            .with_context(|| format!("lvs lv_uuid for {vg}/{lv}"))?;
-        if !out.status.success() {
-            bail!("lvs lv_uuid failed: {}", out.status);
-        }
-        let mut s = String::from_utf8_lossy(&out.stdout).to_lowercase();
-        s.retain(|c| c.is_ascii_hexdigit());
-        Ok(s.chars().take(8).collect())
     }
 }

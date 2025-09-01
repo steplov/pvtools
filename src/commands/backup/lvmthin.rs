@@ -75,7 +75,7 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
                 Ok(()) => {
                     let name = format!("{}/{}", lv.vg_name, lv.lv_name);
                     let leaf = &lv.lv_name;
-                    let id8 = lvmthin_short8(&lv.vg_name, &lv.lv_name)
+                    let id8 = lvmthin_short8(&lv.vg_name, &lv.lv_name, self.runner)
                         .with_context(|| format!("get lv_uuid short8 for {name}"))?;
                     let archive = create_archive_name("lvmthin", leaf, &id8)?;
 
@@ -92,7 +92,7 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
                                 .run(&Pipeline::new().cmd(op.clone()))
                                 .with_context(|| format!("lvmthin op on {name}"))?;
                         }
-                        wait_for_block(&device)
+                        wait_for_block(&device, self.runner)
                             .with_context(|| format!("wait for {}", device.display()))?;
                         self.cleanup.add(snap_fq);
                     }
@@ -142,7 +142,9 @@ impl<'a, R: Runner> Drop for Cleanup<'a, R> {
     fn drop(&mut self) {
         for s in self.snaps.drain(..) {
             let cmd = CmdSpec::new("lvremove").args(["-f", &s]);
-            let _ = self.runner.run(&Pipeline::new().cmd(cmd));
+            if let Err(e) = self.runner.run(&Pipeline::new().cmd(cmd)) {
+                log::warn!("[cleanup] failed to remove LV snapshot {s}: {e}");
+            }
         }
     }
 }

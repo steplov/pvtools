@@ -83,7 +83,7 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
                 .run_capture(&Pipeline::new().cmd(cmd))
                 .with_context(|| format!("zfs list for pool {pool}"))?;
 
-            let guid_map = zfs_guids(pool)?;
+            let guid_map = zfs_guids(pool, self.runner)?;
             for line in out_txt.lines() {
                 let mut it = line.split_whitespace();
                 let name = match it.next() {
@@ -110,7 +110,7 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
                                     .with_context(|| format!("zfs op on {name}"))?;
                             }
                             self.cleanup.add_many([snap, clone.clone()]);
-                            wait_for_block(&device)?;
+                            wait_for_block(&device, self.runner)?;
                         }
 
                         let leaf = dataset_leaf(name);
@@ -172,8 +172,8 @@ impl<'a, R: Runner> Drop for Cleanup<'a, R> {
     fn drop(&mut self) {
         if let Some(r) = self.runner {
             for cmd in self.tasks.drain(..) {
-                if let Err(e) = r.run(&Pipeline::new().cmd(cmd)) {
-                    log::warn!("cleanup failed: {e}");
+                if let Err(e) = r.run(&Pipeline::new().cmd(cmd.clone())) {
+                    log::warn!("[cleanup] failed to run {}: {e}", cmd.render());
                 }
             }
         }
