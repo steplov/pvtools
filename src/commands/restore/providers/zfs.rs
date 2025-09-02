@@ -7,14 +7,14 @@ use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
 use super::super::types::{PbsSnapshot, Provider, RestoreItem};
 
-pub struct ZfsRestore<'a, R: Runner> {
+pub struct ZfsRestore<'a> {
     dest_root: String,
     snapshot: Option<&'a PbsSnapshot>,
-    runner: &'a R,
+    runner: &'a dyn Runner,
 }
 
-impl<'a, R: Runner> ZfsRestore<'a, R> {
-    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a R) -> Self {
+impl<'a> ZfsRestore<'a> {
+    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a dyn Runner) -> Self {
         let z = cfg
             .zfs
             .as_ref()
@@ -72,7 +72,7 @@ impl<'a, R: Runner> ZfsRestore<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
+impl<'a> Provider for ZfsRestore<'a> {
     fn name(&self) -> &'static str {
         "zfs-restore"
     }

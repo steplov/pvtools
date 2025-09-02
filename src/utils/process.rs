@@ -98,7 +98,7 @@ impl CmdSpec {
 }
 
 /// A sequence of commands, possibly piped
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Pipeline {
     pub cmds: Vec<CmdSpec>,
 }
@@ -123,8 +123,7 @@ impl Pipeline {
     }
 }
 
-/// Runner trait: abstraction for real, dry-run, fake runners
-pub trait Runner {
+pub trait Runner: Send + Sync {
     fn run(&self, pipeline: &Pipeline) -> Result<()>;
     fn run_capture(&self, pipeline: &Pipeline) -> Result<String>;
 }
@@ -134,6 +133,7 @@ pub struct ProcessRunner {
     bin_overrides: HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl ProcessRunner {
     pub fn new() -> Self {
         Self {

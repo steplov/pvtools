@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
-pub fn zfs_guids<R: Runner>(pool: &str, runner: &R) -> Result<HashMap<String, String>> {
+pub fn zfs_guids(pool: &str, runner: &dyn Runner) -> Result<HashMap<String, String>> {
     let cmd = CmdSpec::new("zfs")
         .args(["get", "-H", "-o", "name,value", "guid", "-r", pool])
         .stdout(StdioSpec::Pipe)
@@ -26,7 +26,7 @@ pub fn zfs_guids<R: Runner>(pool: &str, runner: &R) -> Result<HashMap<String, St
     Ok(map)
 }
 
-pub fn lvmthin_short8<R: Runner>(vg: &str, lv: &str, runner: &R) -> Result<String> {
+pub fn lvmthin_short8(vg: &str, lv: &str, runner: &dyn Runner) -> Result<String> {
     let cmd = CmdSpec::new("lvs")
         .args(["--noheadings", "-o", "lv_uuid", &format!("{vg}/{lv}")])
         .stdout(StdioSpec::Pipe)

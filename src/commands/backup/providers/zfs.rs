@@ -33,16 +33,16 @@ struct ZfsNames {
     device: PathBuf,
 }
 
-pub struct ZfsProvider<'a, R: Runner> {
+pub struct ZfsProvider<'a> {
     pools: &'a [String],
     pbs: &'a Pbs,
     run_ts: u64,
-    cleanup: Cleanup<'a, R>,
-    runner: &'a R,
+    cleanup: Cleanup<'a>,
+    runner: &'a dyn Runner,
 }
 
-impl<'a, R: Runner> ZfsProvider<'a, R> {
-    pub fn new(cfg: &'a Config, runner: &'a R) -> Self {
+impl<'a> ZfsProvider<'a> {
+    pub fn new(cfg: &'a Config, runner: &'a dyn Runner) -> Self {
         let z = cfg.zfs.as_ref().expect("[zfs] missing");
 
         Self {
@@ -67,7 +67,7 @@ impl<'a, R: Runner> ZfsProvider<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
+impl<'a> Provider for ZfsProvider<'a> {
     fn name(&self) -> &'static str {
         "zfs"
     }
@@ -192,13 +192,13 @@ impl<'a, R: Runner> Provider for ZfsProvider<'a, R> {
 }
 
 #[derive(Default)]
-struct Cleanup<'a, R: Runner> {
+struct Cleanup<'a> {
     tasks: Vec<CmdSpec>,
-    runner: Option<&'a R>,
+    runner: Option<&'a dyn Runner>,
 }
 
-impl<'a, R: Runner> Cleanup<'a, R> {
-    fn new(runner: &'a R) -> Self {
+impl<'a> Cleanup<'a> {
+    fn new(runner: &'a dyn Runner) -> Self {
         Self {
             tasks: Vec::new(),
             runner: Some(runner),
@@ -213,7 +213,7 @@ impl<'a, R: Runner> Cleanup<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Drop for Cleanup<'a, R> {
+impl<'a> Drop for Cleanup<'a> {
     fn drop(&mut self) {
         if let Some(r) = self.runner {
             for cmd in self.tasks.drain(..) {

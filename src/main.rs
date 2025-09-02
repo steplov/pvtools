@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tracing_subscriber::{EnvFilter, fmt};
 
 mod commands;
@@ -10,12 +10,12 @@ mod utils;
 use commands::backup;
 use commands::restore;
 use config::Config;
-use utils::process::ProcessRunner;
+use utils::process::{ProcessRunner, Runner};
 
 pub struct AppCtx {
     pub debug: bool,
     pub cfg: Config,
-    pub runner: ProcessRunner,
+    pub runner: Arc<dyn Runner>,
 }
 
 #[derive(Parser, Debug)]
@@ -88,7 +88,7 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-    let runner = ProcessRunner::new();
+    let runner = Arc::new(ProcessRunner::new());
 
     let ctx = AppCtx {
         debug: cli.debug,

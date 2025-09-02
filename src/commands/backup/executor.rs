@@ -6,7 +6,7 @@ use crate::{
     utils::{
         bins::ensure_bins,
         lock::LockGuard,
-        process::{CmdSpec, EnvValue, Pipeline, Runner, StdioSpec},
+        process::{CmdSpec, EnvValue, Pipeline, StdioSpec}
     },
 };
 use anyhow::{Context, Result, bail};
@@ -26,14 +26,12 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
     }
 
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
+    let runner = ctx.runner.as_ref();
     if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, &ctx.runner)));
+        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, runner)));
     }
     if ctx.cfg.lvmthin.is_some() {
-        providers.push(Box::new(lvmthin::LvmThinProvider::new(
-            &ctx.cfg,
-            &ctx.runner,
-        )));
+        providers.push(Box::new(lvmthin::LvmThinProvider::new(&ctx.cfg, runner)));
     }
 
     let mut volumes: Vec<Volume> = Vec::new();
@@ -53,7 +51,7 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
     log_plan(&volumes, repo, ns_opt, &ctx.cfg.pbs.backup_id);
 
     if let Some(ns) = ns_opt {
-        ns_ensure(repo, ns, &envs, dry_run, &ctx.runner)?;
+        ns_ensure(repo, ns, &envs, dry_run, ctx)?;
     }
 
     for p in providers.iter_mut() {
@@ -106,16 +104,14 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
 pub fn list_archives(ctx: &AppCtx) -> Result<()> {
     let _lock = LockGuard::try_acquire("pvtool-backup")?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
+    let runner = ctx.runner.as_ref();
 
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, &ctx.runner)));
+        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, runner)));
     }
     if ctx.cfg.lvmthin.is_some() {
-        providers.push(Box::new(lvmthin::LvmThinProvider::new(
-            &ctx.cfg,
-            &ctx.runner,
-        )));
+        providers.push(Box::new(lvmthin::LvmThinProvider::new(&ctx.cfg, runner)));
     }
 
     let mut volumes: Vec<Volume> = Vec::new();

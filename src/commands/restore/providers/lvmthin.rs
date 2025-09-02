@@ -7,14 +7,14 @@ use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
 use super::super::types::{PbsSnapshot, Provider, RestoreItem};
 
-pub struct LvmthinRestore<'a, R: Runner> {
+pub struct LvmthinRestore<'a> {
     vg: String,
     snapshot: Option<&'a PbsSnapshot>,
-    runner: &'a R,
+    runner: &'a dyn Runner,
 }
 
-impl<'a, R: Runner> LvmthinRestore<'a, R> {
-    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a R) -> Self {
+impl<'a> LvmthinRestore<'a> {
+    pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a dyn Runner) -> Self {
         let l = cfg
             .lvmthin
             .as_ref()
@@ -54,7 +54,7 @@ impl<'a, R: Runner> LvmthinRestore<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Provider for LvmthinRestore<'a, R> {
+impl<'a> Provider for LvmthinRestore<'a> {
     fn name(&self) -> &'static str {
         "lvmthin"
     }

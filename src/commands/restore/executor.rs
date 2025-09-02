@@ -11,7 +11,7 @@ use crate::{
     utils::{
         bins::ensure_bins,
         lock::LockGuard,
-        process::{CmdSpec, Pipeline, Runner},
+        process::{CmdSpec, Pipeline},
         time::fmt_utc,
         time::parse_rfc3339_to_unix,
     },
@@ -77,7 +77,7 @@ pub fn list_snapshots_cmd(ctx: &AppCtx, opts: ListSnapshotsOpts) -> Result<()> {
     let repo = ctx.cfg.pbs.repo(opts.source.as_deref())?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
 
-    let snaps = list_snapshots(repo, ns_opt, &ctx.runner)?;
+    let snaps = list_snapshots(repo, ns_opt, ctx)?;
     if snaps.is_empty() {
         log::info!("no snapshots found in repo {repo}");
         return Ok(());
@@ -106,8 +106,9 @@ pub fn list_archives(ctx: &AppCtx, opts: ListArchivesOpts) -> Result<()> {
     let repo = ctx.cfg.pbs.repo(opts.source.as_deref())?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
     let point = &opts.snapshot;
+    let runner = ctx.runner.as_ref();
 
-    let snaps = list_snapshots(repo, ns_opt, &ctx.runner)?;
+    let snaps = list_snapshots(repo, ns_opt, ctx)?;
     if snaps.is_empty() {
         bail!("no snapshots found in repo {repo}");
     }
@@ -120,17 +121,13 @@ pub fn list_archives(ctx: &AppCtx, opts: ListArchivesOpts) -> Result<()> {
 
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsRestore::new(
-            &ctx.cfg,
-            Some(snap),
-            &ctx.runner,
-        )));
+        providers.push(Box::new(zfs::ZfsRestore::new(&ctx.cfg, Some(snap), runner)));
     }
     if ctx.cfg.lvmthin.is_some() {
         providers.push(Box::new(lvmthin::LvmthinRestore::new(
             &ctx.cfg,
             Some(snap),
-            &ctx.runner,
+            runner,
         )));
     }
 
@@ -158,7 +155,8 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
     let repo = ctx.cfg.pbs.repo(opts.source.as_deref())?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
     let point = &opts.snapshot;
-    let snaps = list_snapshots(repo, ns_opt, &ctx.runner)?;
+    let runner = ctx.runner.as_ref();
+    let snaps = list_snapshots(repo, ns_opt, ctx)?;
     if snaps.is_empty() {
         bail!("no snapshots found in repo {repo}");
     }
@@ -172,17 +170,13 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
 
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsRestore::new(
-            &ctx.cfg,
-            Some(snap),
-            &ctx.runner,
-        )));
+        providers.push(Box::new(zfs::ZfsRestore::new(&ctx.cfg, Some(snap), runner)));
     }
     if ctx.cfg.lvmthin.is_some() {
         providers.push(Box::new(lvmthin::LvmthinRestore::new(
             &ctx.cfg,
             Some(snap),
-            &ctx.runner,
+            runner,
         )));
     }
 
@@ -261,14 +255,16 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
     Ok(())
 }
 
-fn list_snapshots(repo: &str, ns: Option<&str>, runner: &dyn Runner) -> Result<Vec<PbsSnapshot>> {
-    let mut cmd = CmdSpec::new("proxmox-backup-client").args([
+fn list_snapshots(repo: &str, ns: Option<&str>, ctx: &AppCtx) -> Result<Vec<PbsSnapshot>> {
+        let mut cmd = CmdSpec::new("proxmox-backup-client").args([
         "snapshots",
         "--repository",
         repo,
         "--output-format",
         "json",
     ]);
+    let runner = ctx.runner.as_ref();
+
     if let Some(ns) = ns {
         cmd = cmd.args(["--ns", ns]);
     }

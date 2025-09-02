@@ -7,7 +7,7 @@ use tracing as log;
 
 use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
-pub fn wait_for_block<R: Runner>(dev: &Path, runner: &R) -> Result<()> {
+pub fn wait_for_block(dev: &Path, runner: &dyn Runner) -> Result<()> {
     wait_for_block_with(
         dev,
         Duration::from_secs(5),
@@ -16,11 +16,11 @@ pub fn wait_for_block<R: Runner>(dev: &Path, runner: &R) -> Result<()> {
     )
 }
 
-pub fn wait_for_block_with<R: Runner>(
+pub fn wait_for_block_with(
     dev: &Path,
     timeout: Duration,
     delay: Duration,
-    runner: &R,
+    runner: &dyn Runner,
 ) -> Result<()> {
     let start = Instant::now();
     let mut warned = false;

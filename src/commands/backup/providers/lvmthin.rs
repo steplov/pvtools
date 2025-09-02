@@ -28,16 +28,16 @@ struct LvmMeta {
     run_ts: u64,
 }
 
-pub struct LvmThinProvider<'a, R: Runner> {
+pub struct LvmThinProvider<'a> {
     vgs_set: HashSet<String>,
     pbs: &'a Pbs,
     run_ts: u64,
-    cleanup: Cleanup<'a, R>,
-    runner: &'a R,
+    cleanup: Cleanup<'a>,
+    runner: &'a dyn Runner,
 }
 
-impl<'a, R: Runner> LvmThinProvider<'a, R> {
-    pub fn new(cfg: &'a Config, runner: &'a R) -> Self {
+impl<'a> LvmThinProvider<'a> {
+    pub fn new(cfg: &'a Config, runner: &'a dyn Runner) -> Self {
         let l = cfg
             .lvmthin
             .as_ref()
@@ -66,7 +66,7 @@ impl<'a, R: Runner> LvmThinProvider<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
+impl<'a> Provider for LvmThinProvider<'a> {
     fn name(&self) -> &'static str {
         "lvmthin"
     }
@@ -155,13 +155,13 @@ impl<'a, R: Runner> Provider for LvmThinProvider<'a, R> {
     }
 }
 
-struct Cleanup<'a, R: Runner> {
+struct Cleanup<'a> {
     snaps: Vec<String>,
-    runner: &'a R,
+    runner: &'a dyn Runner,
 }
 
-impl<'a, R: Runner> Cleanup<'a, R> {
-    fn new(runner: &'a R) -> Self {
+impl<'a> Cleanup<'a> {
+    fn new(runner: &'a dyn Runner) -> Self {
         Self {
             snaps: Vec::new(),
             runner,
@@ -173,7 +173,7 @@ impl<'a, R: Runner> Cleanup<'a, R> {
     }
 }
 
-impl<'a, R: Runner> Drop for Cleanup<'a, R> {
+impl<'a> Drop for Cleanup<'a> {
     fn drop(&mut self) {
         for s in self.snaps.drain(..) {
             let cmd = CmdSpec::new("lvremove").args(["-f", &s]);
