@@ -1,4 +1,4 @@
-use super::{Provider, Volume};
+use super::super::types::{Provider, Volume};
 use anyhow::{Context, Result};
 use std::{path::PathBuf, sync::Arc};
 use tracing as log;

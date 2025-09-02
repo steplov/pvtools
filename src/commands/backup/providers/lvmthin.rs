@@ -1,4 +1,4 @@
-use super::{Provider, Volume};
+use super::super::types::{Provider, Volume};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{collections::HashSet, path::PathBuf, sync::Arc};

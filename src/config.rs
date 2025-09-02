@@ -448,7 +448,6 @@ ns = "pv"
 backup_id = "backup-pv"
 password_file = "token"
 keyfile = "enc.key"
-default_repo = "nas"
 pv_exclude_re = "test-.*"
 
 [pbs.repos]
@@ -467,10 +466,7 @@ pools      = ["tank", " tank "]
 
         assert_eq!(cfg.pbs.ns.as_deref(), Some("pv"));
         assert_eq!(cfg.pbs.backup_id, "backup-pv");
-        assert_eq!(
-            cfg.pbs.repo(None).unwrap(),
-            "root@pam!pve@192.168.0.24:nas-store"
-        );
+        assert!(cfg.pbs.repo(None).is_err());
         assert_eq!(
             cfg.pbs.repo(Some("s3")).unwrap(),
             "root@pam!pve@192.168.0.25:s3-store"
@@ -554,7 +550,6 @@ clone_suffix = "pbs"
 backup_id = "backup-pv"
 password_file = "token"
 keyfile = "enc.key"
-default_repo = "b"
 
 [pbs.repos]
 b = "url-b"
@@ -577,7 +572,5 @@ clone_suffix = "pbs"
         let pos_a = printed.find("\na = \"url-a\"").unwrap();
         let pos_b = printed.find("\nb = \"url-b\"").unwrap();
         assert!(pos_a < pos_b);
-
-        assert!(printed.contains("default_repo = \"b\""));
     }
 }

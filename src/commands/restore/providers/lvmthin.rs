@@ -5,76 +5,58 @@ use crate::config::Config;
 use crate::utils::naming::parse_archive_name;
 use crate::utils::process::{CmdSpec, Pipeline, Runner, StdioSpec};
 
-use super::{PbsSnapshot, Provider, RestoreItem};
+use super::super::types::{PbsSnapshot, Provider, RestoreItem};
 
-pub struct ZfsRestore<'a, R: Runner> {
-    dest_root: String,
+pub struct LvmthinRestore<'a, R: Runner> {
+    vg: String,
     snapshot: Option<&'a PbsSnapshot>,
     runner: &'a R,
 }
 
-impl<'a, R: Runner> ZfsRestore<'a, R> {
+impl<'a, R: Runner> LvmthinRestore<'a, R> {
     pub fn new(cfg: &Config, snapshot: Option<&'a PbsSnapshot>, runner: &'a R) -> Self {
-        let z = cfg
-            .zfs
+        let l = cfg
+            .lvmthin
             .as_ref()
-            .expect("[zfs] missing in config (restore disabled)");
+            .expect("[lvmthin] missing in config (restore disabled)");
 
-        let dest_root = z
+        let vg = l
             .restore
             .as_ref()
-            .map(|r| r.dest_root.clone())
-            .expect("[zfs.restore] missing dest_root");
+            .map(|r| r.vg.clone())
+            .expect("[lvmthin.restore] missing vg");
 
         Self {
-            dest_root,
+            vg,
             snapshot,
             runner,
         }
     }
 
-    fn resolve_dataset_target(&self, archive: &str) -> Result<PathBuf> {
+    fn resolve_lv_target(&self, archive: &str) -> Result<PathBuf> {
         let (provider, leaf, _id) = parse_archive_name(archive)?;
-        if provider != "zfs" {
-            bail!("not a zfs archive: {archive}");
+        if provider != "lvmthin" {
+            bail!("not an lvmthin archive: {archive}");
         }
 
-        let dataset = format!("{}/{}", self.dest_root, leaf);
+        let lv_path = format!("/dev/{}/{}", self.vg, leaf);
 
-        // check dataset existence
-        let cmd_list = CmdSpec::new("zfs")
-            .args(["list", "-H", "-o", "name", &dataset])
+        let cmd = CmdSpec::new("lvs")
+            .args(["--noheadings", "-o", "lv_name", &lv_path])
             .stdout(StdioSpec::Null)
             .stderr(StdioSpec::Null);
+
         self.runner
-            .run(&Pipeline::new().cmd(cmd_list))
-            .with_context(|| format!("zfs list {dataset}"))?;
+            .run(&Pipeline::new().cmd(cmd))
+            .with_context(|| format!("lvs check {lv_path}"))?;
 
-        // resolve mountpoint
-        let cmd_get = CmdSpec::new("zfs")
-            .args(["get", "-H", "-o", "value", "mountpoint", &dataset])
-            .stdout(StdioSpec::Pipe)
-            .stderr(StdioSpec::Null);
-        let mountpoint = self
-            .runner
-            .run_capture(&Pipeline::new().cmd(cmd_get))
-            .with_context(|| format!("zfs get mountpoint {dataset}"))?
-            .trim()
-            .to_string();
-
-        let target = if mountpoint == "-" || mountpoint == "none" {
-            PathBuf::from(format!("/dev/zvol/{dataset}"))
-        } else {
-            PathBuf::from(format!("{mountpoint}/{leaf}"))
-        };
-
-        Ok(target)
+        Ok(PathBuf::from(lv_path))
     }
 }
 
-impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
+impl<'a, R: Runner> Provider for LvmthinRestore<'a, R> {
     fn name(&self) -> &'static str {
-        "zfs-restore"
+        "lvmthin"
     }
 
     fn collect_restore(
@@ -86,7 +68,7 @@ impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
         let mut out = Vec::new();
 
         if let Some(a) = archive {
-            if !a.starts_with("zfs_") {
+            if !a.starts_with("lvmthin_") {
                 return Ok(out);
             }
             if let Some(snap) = self.snapshot {
@@ -96,11 +78,11 @@ impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
                     .find(|f| f.filename == a)
                     .ok_or_else(|| anyhow::anyhow!("archive {a} not found in snapshot"))?;
 
-                let target = self.resolve_dataset_target(&file.filename)?;
+                let target = self.resolve_lv_target(&file.filename)?;
                 out.push(RestoreItem {
                     archive: file.filename.clone(),
                     target,
-                    label: format!("zfs:{}", file.filename),
+                    label: format!("lvmthin:{}", file.filename),
                 });
             } else {
                 bail!("no snapshot context for archive {a}");
@@ -108,12 +90,12 @@ impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
         } else if all {
             if let Some(snap) = self.snapshot {
                 for f in &snap.files {
-                    if f.filename.starts_with("zfs_") {
-                        let target = self.resolve_dataset_target(&f.filename)?;
+                    if f.filename.starts_with("lvmthin_") {
+                        let target = self.resolve_lv_target(&f.filename)?;
                         out.push(RestoreItem {
                             archive: f.filename.clone(),
                             target,
-                            label: format!("zfs:{}", f.filename),
+                            label: format!("lvmthin:{}", f.filename),
                         });
                     }
                 }
@@ -128,7 +110,7 @@ impl<'a, R: Runner> Provider for ZfsRestore<'a, R> {
     fn list_archives(&self, snap: &PbsSnapshot) -> Vec<String> {
         snap.files
             .iter()
-            .filter(|f| f.filename.starts_with("zfs_"))
+            .filter(|f| f.filename.starts_with("lvmthin_"))
             .map(|f| f.filename.clone())
             .collect()
     }
