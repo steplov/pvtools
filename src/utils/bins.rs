@@ -1,8 +1,9 @@
-use anyhow::{Result, anyhow};
 use std::{
     env,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Result, anyhow};
 
 pub fn ensure_bins<I, S>(bins: I) -> Result<()>
 where

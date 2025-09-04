@@ -1,21 +1,26 @@
+use std::{path::PathBuf, sync::Arc};
+
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
-use std::{path::PathBuf, sync::Arc};
 use tracing_subscriber::{EnvFilter, fmt};
 
 mod commands;
 mod config;
+mod tooling;
+mod ui;
 mod utils;
+mod volume;
 
-use commands::backup;
-use commands::restore;
+use commands::{backup, restore};
 use config::Config;
+use tooling::Toolbox;
 use utils::process::{ProcessRunner, Runner};
 
 pub struct AppCtx {
     pub debug: bool,
     pub cfg: Config,
     pub runner: Arc<dyn Runner>,
+    pub tools: Toolbox,
 }
 
 #[derive(Parser, Debug)]
@@ -53,6 +58,7 @@ fn init_tracing(debug: bool) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     let _ = fmt()
         .with_env_filter(filter)
+        .with_level(false)
         .with_target(false)
         .with_file(debug)
         .with_line_number(debug)
@@ -89,11 +95,13 @@ fn main() -> Result<()> {
     };
 
     let runner = Arc::new(ProcessRunner::new());
+    let tools = Toolbox::new(&cfg, runner.clone())?;
 
     let ctx = AppCtx {
         debug: cli.debug,
         cfg,
         runner,
+        tools,
     };
 
     match cmd {

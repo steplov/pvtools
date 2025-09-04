@@ -1,13 +1,13 @@
-use anyhow::{Context, Result, bail};
-use fs2::FileExt;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     fs::{self, File, OpenOptions},
     io,
     path::{Path, PathBuf},
 };
 
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use anyhow::{Context, Result, bail};
+use fs2::FileExt;
 
 pub struct LockGuard {
     file: File,
@@ -120,8 +120,9 @@ fn sanitize_name(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn acquire_and_release() {

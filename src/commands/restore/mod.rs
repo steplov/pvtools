@@ -5,7 +5,6 @@ use crate::AppCtx;
 
 mod executor;
 mod providers;
-mod types;
 
 #[derive(Debug, Args)]
 pub struct RestoreArgs {
@@ -70,7 +69,7 @@ impl RestoreCmd {
         match self {
             RestoreCmd::ListSnapshots(args) => {
                 let opts = executor::ListSnapshotsOpts::from(args);
-                executor::list_snapshots_cmd(ctx, opts)
+                executor::list_snapshots(ctx, opts)
             }
             RestoreCmd::ListArchives(args) => {
                 let opts = executor::ListArchivesOpts::try_from(args)?;

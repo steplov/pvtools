@@ -1,120 +1,80 @@
-use super::ns::ensure as ns_ensure;
-use super::providers::{lvmthin, zfs};
-use super::types::{Provider, Volume};
-use crate::{
-    AppCtx,
-    utils::{
-        bins::ensure_bins,
-        lock::LockGuard,
-        process::{CmdSpec, EnvValue, Pipeline, StdioSpec}
-    },
-};
-use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
+use anyhow::{Context, Result};
 use tracing as log;
 
+use super::providers::ProviderRegistry;
+use crate::{
+    AppCtx,
+    tooling::pbs::BackupItem,
+    ui,
+    utils::{exec_policy::with_dry_run_enabled, lock::LockGuard},
+    volume::{Volume, VolumeSliceExt},
+};
+
 pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
-    ensure_bins(["proxmox-backup-client"])?;
     let _lock = LockGuard::try_acquire("pvtool-backup")?;
 
-    let repo = ctx.cfg.pbs.repo(target)?;
-    let ns_opt = ctx.cfg.pbs.ns.as_deref();
+    with_dry_run_enabled(dry_run, || {
+        let repo = ctx.cfg.pbs.repo_target(target)?;
+        let ns_opt = ctx.cfg.pbs.ns.as_deref();
+        let registry = ProviderRegistry::new(ctx);
+        let mut providers = registry.build();
+        let mut volumes: Vec<Volume> = Vec::new();
 
-    let mut envs: Vec<(String, EnvValue)> = Vec::new();
-    if let Some(ref pw) = ctx.cfg.pbs.password {
-        envs.push(("PBS_PASSWORD".to_string(), EnvValue::Secret(pw.clone())));
-    }
+        for p in providers.iter_mut() {
+            let mut v = p
+                .discover()
+                .with_context(|| format!("collect from provider {}", p.name()))?;
+            volumes.append(&mut v);
+        }
 
-    let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    let runner = ctx.runner.as_ref();
-    if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, runner)));
-    }
-    if ctx.cfg.lvmthin.is_some() {
-        providers.push(Box::new(lvmthin::LvmThinProvider::new(&ctx.cfg, runner)));
-    }
+        if volumes.is_empty() {
+            log::info!("nothing to backup");
+            return Ok(());
+        }
 
-    let mut volumes: Vec<Volume> = Vec::new();
-    for p in providers.iter_mut() {
-        let mut v = p
-            .discover()
-            .with_context(|| format!("collect from provider {}", p.name()))?;
-        volumes.append(&mut v);
-    }
+        volumes.ensure_unique_archive_names()?;
 
-    if volumes.is_empty() {
-        log::info!("nothing to backup");
-        return Ok(());
-    }
+        ui::log_pbs_info(repo, ns_opt, &ctx.cfg.pbs.backup_id, None);
+        ui::log_archives(&volumes);
 
-    ensure_unique_archive_names(&volumes)?;
-    log_plan(&volumes, repo, ns_opt, &ctx.cfg.pbs.backup_id);
+        if let Some(ns) = ns_opt {
+            ctx.tools.pbs().ns_ensure(repo, ns)?;
+        }
 
-    if let Some(ns) = ns_opt {
-        ns_ensure(repo, ns, &envs, dry_run, ctx)?;
-    }
+        for p in providers.iter_mut() {
+            p.prepare(&volumes)?;
+        }
 
-    for p in providers.iter_mut() {
-        p.prepare(&volumes, dry_run)?;
-    }
-    let mut args: Vec<String> = Vec::new();
-    args.push("backup".to_string());
-    for v in &volumes {
-        args.push(format!("{}:{}", v.archive, v.device.display()));
-    }
-    args.push("--backup-id".to_string());
-    args.push(ctx.cfg.pbs.backup_id.clone());
-    if let Some(ns) = ns_opt {
-        args.push("--ns".to_string());
-        args.push(ns.to_string());
-    }
-    args.push("--repository".to_string());
-    args.push(repo.to_string());
-    if let Some(ref kf) = ctx.cfg.pbs.keyfile {
-        args.push("--keyfile".to_string());
-        args.push(kf.display().to_string());
-    }
+        let keyfile = ctx.cfg.pbs.keyfile.as_deref();
+        let items: Vec<BackupItem> = volumes
+            .iter()
+            .map(|v| BackupItem {
+                archive: v.archive.as_str(),
+                device: v.device.as_path(),
+            })
+            .collect();
+        ctx.tools
+            .pbs()
+            .backup(repo, ns_opt, &ctx.cfg.pbs.backup_id, keyfile, &items)?;
 
-    let cmd = CmdSpec::new("proxmox-backup-client")
-        .args(args)
-        .envs(envs.clone())
-        .stdout(StdioSpec::Inherit)
-        .stderr(StdioSpec::Inherit);
+        log::info!("\n");
 
-    if dry_run {
-        log::info!("[backup] DRY-RUN: {}", cmd.render());
-        return Ok(());
-    }
-
-    let ns_disp = ns_opt.unwrap_or("<root>");
-    log::info!(
-        "[backup] exec -> repo={repo}, ns={ns_disp}, id={}, devices={}",
-        ctx.cfg.pbs.backup_id,
-        volumes.len()
-    );
-
-    ctx.runner
-        .run(&Pipeline::new().cmd(cmd))
-        .context("run proxmox-backup-client backup")?;
-
-    log::info!("[backup] done");
-    Ok(())
+        if let Ok(ts) = latest_backup_time(ctx, repo, ns_opt, &ctx.cfg.pbs.backup_id) {
+            ui::log_pbs_info(repo, ns_opt, &ctx.cfg.pbs.backup_id, Some(ts));
+        } else {
+            log::info!("Backup finished, but latest snapshot time is not visible yet.");
+        }
+        log::info!("Done");
+        Ok(())
+    })
 }
 
 pub fn list_archives(ctx: &AppCtx) -> Result<()> {
     let _lock = LockGuard::try_acquire("pvtool-backup")?;
-    let ns_opt = ctx.cfg.pbs.ns.as_deref();
-    let runner = ctx.runner.as_ref();
-
-    let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    if ctx.cfg.zfs.is_some() {
-        providers.push(Box::new(zfs::ZfsProvider::new(&ctx.cfg, runner)));
-    }
-    if ctx.cfg.lvmthin.is_some() {
-        providers.push(Box::new(lvmthin::LvmThinProvider::new(&ctx.cfg, runner)));
-    }
-
+    let registry = ProviderRegistry::new(ctx);
+    let mut providers = registry.build();
     let mut volumes: Vec<Volume> = Vec::new();
+
     for p in providers.iter_mut() {
         let mut v = p
             .discover()
@@ -127,38 +87,19 @@ pub fn list_archives(ctx: &AppCtx) -> Result<()> {
         return Ok(());
     }
 
-    ensure_unique_archive_names(&volumes)?;
-    log_plan(&volumes, "<none>", ns_opt, &ctx.cfg.pbs.backup_id);
+    volumes.ensure_unique_archive_names()?;
+
+    ui::log_archives(&volumes);
+
     Ok(())
 }
 
-fn ensure_unique_archive_names(vols: &[Volume]) -> Result<()> {
-    let mut seen: HashMap<&str, &str> = HashMap::new();
-    for v in vols {
-        if let Some(prev) = seen.insert(v.archive.as_str(), v.label.as_str()) {
-            bail!(
-                "archive name collision: '{}' from '{}' and '{}'",
-                v.archive,
-                prev,
-                v.label
-            );
-        }
-    }
-    Ok(())
-}
-
-fn log_plan(vols: &[Volume], repo: &str, ns: Option<&str>, backup_id: &str) {
-    let ns_disp = ns.unwrap_or("<root>");
-    log::info!(
-        "[backup] plan -> repo={repo}, ns={ns_disp}, id={backup_id}, items={}",
-        vols.len()
-    );
-    for v in vols {
-        log::info!(
-            "[backup]   {} -> host/{}/{}",
-            v.map_src,
-            backup_id,
-            v.archive
-        );
-    }
+fn latest_backup_time(ctx: &AppCtx, repo: &str, ns: Option<&str>, backup_id: &str) -> Result<u64> {
+    let snaps = ctx.tools.pbs().snapshots(repo, ns)?;
+    snaps
+        .iter()
+        .filter(|s| s.backup_id == backup_id)
+        .map(|s| s.backup_time)
+        .max()
+        .context("no snapshot visible after backup with given backup-id")
 }

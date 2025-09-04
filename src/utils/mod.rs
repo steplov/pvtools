@@ -1,6 +1,5 @@
 pub mod bins;
-pub mod dev;
-pub mod ids;
+pub mod exec_policy;
 pub mod lock;
 pub mod process;
 
@@ -20,7 +19,7 @@ pub mod time {
     pub fn fmt_utc(ts: u64) -> Result<String> {
         let ts = i64::try_from(ts).map_err(|_| anyhow!("unix timestamp doesn't fit into i64"))?;
         let dt = OffsetDateTime::from_unix_timestamp(ts)?;
-        Ok(dt.format(&Rfc3339)?) // "YYYY-MM-DDTHH:MM:SSZ"
+        Ok(dt.format(&Rfc3339)?)
     }
 
     pub fn parse_rfc3339_to_unix(s: &str) -> Result<u64> {
@@ -28,7 +27,7 @@ pub mod time {
             .with_context(|| format!("invalid RFC3339 datetime: {s}"))?
             .to_offset(UtcOffset::UTC);
 
-        let ts = dt.unix_timestamp(); // i64 секунд
+        let ts = dt.unix_timestamp();
         u64::try_from(ts).map_err(|_| anyhow!("timestamp is negative: {}", ts))
     }
 
@@ -42,8 +41,9 @@ pub mod time {
 }
 
 pub mod naming {
-    use anyhow::{Result, anyhow, bail};
     use std::path::Path;
+
+    use anyhow::{Result, anyhow, bail};
 
     pub fn create_archive_name(provider: &str, leaf: &str, id: &str) -> Result<String> {
         let path = Path::new(leaf);

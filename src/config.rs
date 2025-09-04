@@ -1,11 +1,12 @@
-use anyhow::{Context, Result, anyhow, bail};
-use config as cfg;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context, Result, anyhow, bail};
+use config as cfg;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -50,19 +51,29 @@ pub struct LvmThinRestore {
 }
 
 impl Pbs {
-    pub fn repo<'a>(&'a self, sel: Option<&str>) -> Result<&'a str> {
+    pub fn repo_target<'a>(&'a self, sel: Option<&str>) -> Result<&'a str> {
+        self.repo_with_kind(sel, "target", Some("--target"))
+    }
+
+    pub fn repo_source<'a>(&'a self, sel: Option<&str>) -> Result<&'a str> {
+        self.repo_with_kind(sel, "source", Some("--source"))
+    }
+
+    fn repo_with_kind<'a>(
+        &'a self,
+        sel: Option<&str>,
+        kind: &str,
+        flag_hint: Option<&str>,
+    ) -> Result<&'a str> {
         if let Some(name) = sel {
             return self.repos.get(name).map(|s| s.as_str()).ok_or_else(|| {
-                anyhow!(
-                    "unknown target/source '{}'; known: {}",
-                    name,
-                    self.known_targets()
-                )
+                anyhow!("unknown {kind} '{}'; known: {}", name, self.known_targets())
             });
         }
 
+        let flags = flag_hint.unwrap_or("--target or --source");
         Err(anyhow!(
-            "no target/source provided; specify --target or --source <{}>",
+            "no {kind} provided; specify {flags} <{}>",
             self.known_targets()
         ))
     }
@@ -357,13 +368,14 @@ impl Config {
 }
 
 mod config_helpers {
-    use anyhow::Result;
     use std::{
         collections::HashSet,
         fs,
         path::{Path, PathBuf},
         process::Command,
     };
+
+    use anyhow::Result;
 
     pub(super) struct Normalizer<'a> {
         pub base_dir: &'a Path,
@@ -421,9 +433,11 @@ mod config_helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn write(path: &Path, s: &str) {
         fs::write(path, s).unwrap();
@@ -466,13 +480,17 @@ pools      = ["tank", " tank "]
 
         assert_eq!(cfg.pbs.ns.as_deref(), Some("pv"));
         assert_eq!(cfg.pbs.backup_id, "backup-pv");
-        assert!(cfg.pbs.repo(None).is_err());
+        assert!(cfg.pbs.repo_target(None).is_err());
         assert_eq!(
-            cfg.pbs.repo(Some("s3")).unwrap(),
+            cfg.pbs.repo_target(Some("s3")).unwrap(),
             "root@pam!pve@192.168.0.25:s3-store"
         );
 
-        let err = cfg.pbs.repo(Some("offsite")).unwrap_err().to_string();
+        let err = cfg
+            .pbs
+            .repo_target(Some("offsite"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unknown target"));
 
         let re = cfg.pbs.pv_exclude_re.as_ref().unwrap();

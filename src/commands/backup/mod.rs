@@ -4,9 +4,7 @@ use clap::{Args, Subcommand};
 use crate::AppCtx;
 
 mod executor;
-mod ns;
 mod providers;
-mod types;
 
 #[derive(Debug, Args)]
 pub struct BackupArgs {

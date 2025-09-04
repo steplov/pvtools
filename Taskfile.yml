@@ -39,4 +39,4 @@ tasks:
     cmds:
       - cmd: bash -lc 'ulimit -n 8192; cargo zigbuild --release --target x86_64-unknown-linux-musl'
       - mkdir -p {{.DIST}}
-      - cp target/x86_64-unknown-linux-musl/debug/{{.BIN}} {{.DIST}}/{{.BIN}}-linux-x86_64
+      - cp target/x86_64-unknown-linux-musl/release/{{.BIN}} {{.DIST}}/{{.BIN}}-linux-x86_64
