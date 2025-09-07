@@ -9,6 +9,7 @@ use crate::{
 
 pub mod block;
 pub mod dd;
+pub mod fs;
 pub mod lvm;
 pub mod pbs;
 pub mod pvesh;
@@ -16,6 +17,7 @@ pub mod zfs;
 
 pub use block::{BlockCli, BlockPort};
 pub use dd::{DdCli, DdPort};
+pub use fs::{FsCli, FsPort};
 pub use lvm::{LvmCli, LvmPort};
 pub use pbs::{PbsCli, PbsPort, PbsSnapshot};
 pub use pvesh::{PveshCli, PveshPort};
@@ -28,6 +30,7 @@ pub struct Toolbox {
     block: Arc<dyn BlockPort>,
     dd: Arc<dyn DdPort>,
     pvesh: Arc<dyn PveshPort>,
+    fs: Arc<dyn FsPort>,
 }
 
 impl Toolbox {
@@ -50,6 +53,7 @@ impl Toolbox {
         let block = Arc::new(BlockCli::new(runner.clone())) as Arc<dyn BlockPort>;
         let dd = Arc::new(DdCli::new()) as Arc<dyn DdPort>;
         let pvesh = Arc::new(PveshCli::new(runner.clone())) as Arc<dyn PveshPort>;
+        let fs = Arc::new(FsCli::new(runner.clone())) as Arc<dyn FsPort>;
 
         Ok(Self {
             pbs,
@@ -58,6 +62,7 @@ impl Toolbox {
             block,
             dd,
             pvesh,
+            fs,
         })
     }
 
@@ -85,6 +90,10 @@ impl Toolbox {
     pub fn pvesh(&self) -> Arc<dyn PveshPort> {
         self.pvesh.clone()
     }
+    #[inline]
+    pub fn fs(&self) -> Arc<dyn FsPort> {
+        self.fs.clone()
+    }
 }
 
 fn ensure_bins_for_cfg(cfg: &Config) -> Result<()> {
@@ -111,6 +120,9 @@ fn ensure_bins_for_cfg(cfg: &Config) -> Result<()> {
         all.insert(b);
     }
     for b in pvesh::REQ_BINS {
+        all.insert(b);
+    }
+    for b in fs::REQ_BINS {
         all.insert(b);
     }
 

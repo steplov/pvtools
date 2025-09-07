@@ -12,6 +12,7 @@ use crate::{
 
 pub struct LvmthinRestore<'a> {
     vg: String,
+    thinpool: String,
     snapshot: Option<&'a PbsSnapshot>,
     lvm: Arc<dyn LvmPort>,
     pvesh: Arc<dyn PveshPort>,
@@ -35,8 +36,15 @@ impl<'a> LvmthinRestore<'a> {
             .map(|r| r.vg.clone())
             .expect("[lvmthin.restore] missing vg");
 
+        let thinpool = l
+            .restore
+            .as_ref()
+            .and_then(|r| r.thinpool.clone())
+            .expect("[lvmthin.restore] missing thinpool");
+
         Self {
             vg,
+            thinpool,
             snapshot,
             lvm,
             pvesh,
@@ -50,7 +58,24 @@ impl<'a> LvmthinRestore<'a> {
             bail!("not an lvmthin archive: {archive}");
         }
 
-        self.lvm.lv_name(&self.vg, &leaf)?;
+        let exists = self.lvm.lv_name(&self.vg, &leaf).is_ok();
+
+        if !exists {
+            let snap = self
+                .snapshot
+                .ok_or_else(|| anyhow!("no snapshot context to size '{archive}'"))?;
+            let file = snap
+                .files
+                .iter()
+                .find(|f| f.filename == archive)
+                .ok_or_else(|| anyhow!("archive {archive} not found in snapshot"))?;
+            let size_bytes = file.size;
+
+            self.lvm
+                .lvcreate_thin(&self.vg, &self.thinpool, &leaf, size_bytes)?;
+            let lv_fq = format!("{}/{}", self.vg, leaf);
+            self.lvm.lvchange_activate(&lv_fq)?;
+        }
 
         let lv_path = format!("/dev/{}/{}", self.vg, leaf);
 
@@ -89,7 +114,7 @@ impl<'a> Provider for LvmthinRestore<'a> {
                     storage: storage_id.to_string(),
                     disk: leaf,
                     archive: file.filename.clone(),
-                    device: target.clone(),
+                    device: target,
                     meta: None,
                 });
             } else {
@@ -105,7 +130,7 @@ impl<'a> Provider for LvmthinRestore<'a> {
                             storage: storage_id.to_string(),
                             disk: leaf,
                             archive: f.filename.clone(),
-                            device: target.clone(),
+                            device: target,
                             meta: None,
                         });
                     }
@@ -187,6 +212,15 @@ mod tests {
         fn lv_uuid_short8(&self, _vg: &str, _lv: &str) -> Result<String> {
             Ok("abcd1234".to_string())
         }
+        fn lvcreate_thin(
+            &self,
+            _vg: &str,
+            _thinpool: &str,
+            _name: &str,
+            _size_bytes: u64,
+        ) -> Result<()> {
+            Ok(())
+        }
     }
 
     fn test_config() -> Config {
@@ -219,9 +253,11 @@ mod tests {
             files: vec![
                 PbsFile {
                     filename: "lvmthin_vm-123_raw_abcd1234.img".to_string(),
+                    size: 4 * 1024 * 1024,
                 },
                 PbsFile {
                     filename: "zfs_vm-456_raw_efgh5678.img".to_string(),
+                    size: 4 * 1024 * 1024,
                 },
             ],
         }
@@ -247,7 +283,7 @@ mod tests {
         let pvesh = Arc::new(MockPvesh);
         let restore = LvmthinRestore::new(&cfg, None, lvm, pvesh);
 
-        let result = restore.resolve_lv_target("zfs_vm-123_raw_abcd1234.img");
+        let result = restore.resolve_lv_target("zfs_vm-123_raw_efgh5678.img");
         assert!(result.is_err());
     }
 

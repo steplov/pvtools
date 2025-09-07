@@ -37,6 +37,7 @@ impl<'a> ProviderRegistry<'a> {
                 self.snapshot,
                 zfs_port,
                 self.ctx.tools.pvesh(),
+                self.ctx.tools.fs(),
             )));
         }
         if cfg.lvmthin.is_some() {

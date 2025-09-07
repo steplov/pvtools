@@ -273,6 +273,15 @@ mod tests {
         fn lv_name(&self, _vg: &str, _leaf: &str) -> Result<String> {
             Ok(_leaf.to_string())
         }
+        fn lvcreate_thin(
+            &self,
+            _vg: &str,
+            _thinpool: &str,
+            _name: &str,
+            _size_bytes: u64,
+        ) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockBlock;

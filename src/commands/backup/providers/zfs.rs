@@ -262,6 +262,9 @@ mod tests {
         fn dataset_mountpoint(&self, _dataset: &str) -> Result<Option<String>> {
             Ok(None)
         }
+        fn create_zvol(&self, _dataset: &str, _size_bytes: u64) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockBlock;

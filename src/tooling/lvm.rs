@@ -32,6 +32,13 @@ pub trait LvmPort: Send + Sync {
     fn lvremove_force(&self, lv_fq: &str) -> Result<()>;
     fn lv_name(&self, vg: &str, lv: &str) -> Result<String>;
     fn lv_uuid_short8(&self, vg: &str, lv: &str) -> Result<String>;
+    fn lvcreate_thin(
+        &self,
+        vg: &str,
+        thinpool: &str,
+        name: &str,
+        size_bytes: u64,
+    ) -> anyhow::Result<()>;
 }
 
 type DynRunner = dyn Runner + Send + Sync;
@@ -184,5 +191,26 @@ impl LvmPort for LvmCli {
         } else {
             anyhow::bail!("unexpected lv_uuid output for {target}: '{out}'");
         }
+    }
+
+    fn lvcreate_thin(
+        &self,
+        vg: &str,
+        thinpool: &str,
+        name: &str,
+        size_bytes: u64,
+    ) -> anyhow::Result<()> {
+        let src = format!("{vg}/{thinpool}");
+        let cmd = self
+            .lvcreate()
+            .args(["-T", &src, "-n", name, "-V", &format!("{}B", &size_bytes)])
+            .stderr(StdioSpec::Inherit)
+            .stdout(StdioSpec::Inherit);
+
+        self.runner
+            .run(&Pipeline::new().cmd(cmd))
+            .with_context(|| format!("lvcreate -T {src} -n {name} -V {size_bytes}B"))?;
+
+        Ok(())
     }
 }

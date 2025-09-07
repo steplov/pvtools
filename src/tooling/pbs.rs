@@ -16,6 +16,7 @@ pub const REQ_BINS: &[&str] = &["proxmox-backup-client"];
 #[derive(Debug, Deserialize)]
 pub struct PbsFile {
     pub filename: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Deserialize)]

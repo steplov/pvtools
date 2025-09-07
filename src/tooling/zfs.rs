@@ -14,6 +14,7 @@ pub trait ZfsPort: Send + Sync {
     fn destroy_recursive(&self, target: &str) -> Result<()>;
     fn assert_dataset_exists(&self, dataset: &str) -> Result<()>;
     fn dataset_mountpoint(&self, dataset: &str) -> Result<Option<String>>;
+    fn create_zvol(&self, dataset: &str, size_bytes: u64) -> anyhow::Result<()>;
 }
 
 type DynRunner = dyn Runner + Send + Sync;
@@ -180,5 +181,14 @@ impl ZfsPort for ZfsCli {
             "-" | "none" => None,
             path => Some(path.to_string()),
         })
+    }
+
+    fn create_zvol(&self, dataset: &str, size_bytes: u64) -> Result<()> {
+        let cmd = self
+            .zfs()
+            .args(["create", "-V", &size_bytes.to_string(), dataset]);
+        self.runner
+            .run(&Pipeline::new().cmd(cmd))
+            .with_context(|| format!("zfs create -V {} {}", size_bytes, dataset))
     }
 }
