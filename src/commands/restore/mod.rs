@@ -56,9 +56,6 @@ pub struct RestoreRunArgs {
     /// Restore all archives from the snapshot
     #[arg(long)]
     pub all: bool,
-    /// Overwrite existing volumes (provider may use this to allow override)
-    #[arg(long)]
-    pub force: bool,
     /// Show what would be restored without executing
     #[arg(long)]
     pub dry_run: bool,

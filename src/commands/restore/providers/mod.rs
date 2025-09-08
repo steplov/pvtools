@@ -7,12 +7,7 @@ use crate::{AppCtx, tooling::PbsSnapshot, volume::Volume};
 
 pub trait Provider {
     fn name(&self) -> &'static str;
-    fn collect_restore(
-        &mut self,
-        archive: Option<&str>,
-        all: bool,
-        force: bool,
-    ) -> Result<Vec<Volume>>;
+    fn collect_restore(&mut self, archive: Option<&str>, all: bool) -> Result<Vec<Volume>>;
     fn list_archives(&self, snap: &PbsSnapshot) -> Vec<String>;
 }
 

@@ -111,12 +111,7 @@ impl<'a> Provider for ZfsRestore<'a> {
         "zfs-restore"
     }
 
-    fn collect_restore(
-        &mut self,
-        archive: Option<&str>,
-        all: bool,
-        _force: bool,
-    ) -> Result<Vec<Volume>> {
+    fn collect_restore(&mut self, archive: Option<&str>, all: bool) -> Result<Vec<Volume>> {
         let mut out = Vec::new();
         let storages = self.pvesh.get_storage()?;
         let storage_id = find_storage(&storages, &self.dest_root)?;
@@ -356,7 +351,7 @@ mod tests {
         let mut restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
 
         let items = restore
-            .collect_restore(Some("zfs_vm-123_raw_abcd1234.img"), false, false)
+            .collect_restore(Some("zfs_vm-123_raw_abcd1234.img"), false)
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].archive, "zfs_vm-123_raw_abcd1234.img");
@@ -375,7 +370,7 @@ mod tests {
         let fs = Arc::new(MockFs);
         let mut restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
 
-        let items = restore.collect_restore(None, true, false).unwrap();
+        let items = restore.collect_restore(None, true).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].archive, "zfs_vm-123_raw_abcd1234.img");
     }
@@ -424,6 +419,6 @@ mod tests {
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
         let mut restore = ZfsRestore::new(&cfg, None, zfs, pvesh, fs);
-        assert!(restore.collect_restore(None, true, false).is_err());
+        assert!(restore.collect_restore(None, true).is_err());
     }
 }

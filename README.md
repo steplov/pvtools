@@ -48,7 +48,6 @@ pvtools restore <SUBCOMMAND> [OPTIONS]
 - `--snapshot <epoch|latest>` — Snapshot timestamp or `latest`
 - `--archive <archive>` — Restore specific archive (can be repeated)
 - `--all` — Restore all archives in snapshot
-- `--force` — Overwrite existing volumes
 - `--dry-run` — Show what would be restored
 
 **Examples:**

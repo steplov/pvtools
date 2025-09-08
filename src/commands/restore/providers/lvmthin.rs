@@ -88,12 +88,7 @@ impl<'a> Provider for LvmthinRestore<'a> {
         "lvmthin"
     }
 
-    fn collect_restore(
-        &mut self,
-        archive: Option<&str>,
-        all: bool,
-        _force: bool,
-    ) -> Result<Vec<Volume>> {
+    fn collect_restore(&mut self, archive: Option<&str>, all: bool) -> Result<Vec<Volume>> {
         let mut out = Vec::new();
         let storages = self.pvesh.get_storage()?;
         let storage_id = find_storage(&storages, &self.vg)?;
@@ -296,7 +291,7 @@ mod tests {
         let mut restore = LvmthinRestore::new(&cfg, Some(&snap), lvm, pvesh);
 
         let items = restore
-            .collect_restore(Some("lvmthin_vm-123_raw_abcd1234.img"), false, false)
+            .collect_restore(Some("lvmthin_vm-123_raw_abcd1234.img"), false)
             .unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].archive, "lvmthin_vm-123_raw_abcd1234.img");
@@ -311,7 +306,7 @@ mod tests {
         let pvesh = Arc::new(MockPvesh);
         let mut restore = LvmthinRestore::new(&cfg, Some(&snap), lvm, pvesh);
 
-        let items = restore.collect_restore(None, true, false).unwrap();
+        let items = restore.collect_restore(None, true).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].archive, "lvmthin_vm-123_raw_abcd1234.img");
     }

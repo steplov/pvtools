@@ -55,7 +55,6 @@ pub struct RunOpts {
     pub snapshot: RestorePoint,
     pub archives: Vec<String>,
     pub all: bool,
-    pub force: bool,
     pub dry_run: bool,
 }
 
@@ -68,7 +67,6 @@ impl TryFrom<&super::RestoreRunArgs> for RunOpts {
             snapshot,
             archives: value.archives.clone(),
             all: value.all,
-            force: value.force,
             dry_run: value.dry_run,
         })
     }
@@ -181,16 +179,16 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
         for p in providers.iter_mut() {
             if opts.all {
                 let mut r = p
-                    .collect_restore(None, true, opts.force)
+                    .collect_restore(None, true)
                     .with_context(|| format!("collect restore plan from provider {}", p.name()))?;
                 items.append(&mut r);
             } else {
                 for a in &selected_archives {
-                    let mut r = p
-                        .collect_restore(Some(a.as_str()), opts.all, opts.force)
-                        .with_context(|| {
-                            format!("collect restore plan from provider {}", p.name())
-                        })?;
+                    let mut r =
+                        p.collect_restore(Some(a.as_str()), opts.all)
+                            .with_context(|| {
+                                format!("collect restore plan from provider {}", p.name())
+                            })?;
                     items.append(&mut r);
                 }
             }
