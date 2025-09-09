@@ -1,0 +1,33 @@
+[package]
+name = "pvtools"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+config = { version = "0.15", default-features = false, features = ["toml"] }
+fs2 = "0.4.3"
+regex = { version = "1.10", default-features = false, features = ["std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.143"
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
+prettytable-rs = "^0.10"
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"

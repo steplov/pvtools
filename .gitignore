@@ -1,0 +1,16 @@
+/target/
+/dist/
+/**/*.rs.bk
+
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+.DS_Store
+Thumbs.db
+
+/config.toml
+/token
+/enc.key
