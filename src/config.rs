@@ -69,8 +69,7 @@ pub enum RestoreTarget {
     },
     LvmThin {
         vg: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        thinpool: Option<String>,
+        thinpool: String,
     },
 }
 
@@ -79,11 +78,7 @@ impl fmt::Display for RestoreTarget {
         match self {
             RestoreTarget::Zfs { root } => write!(f, "zfs(root={})", root),
             RestoreTarget::LvmThin { vg, thinpool } => {
-                if let Some(tp) = thinpool {
-                    write!(f, "lvmthin(vg={}, thinpool={})", vg, tp)
-                } else {
-                    write!(f, "lvmthin(vg={})", vg)
-                }
+                write!(f, "lvmthin(vg={}, thinpool={})", vg, thinpool)
             }
         }
     }
@@ -185,7 +180,7 @@ impl Config {
         let ns = n.trim_opt(raw.pbs.ns);
         let backup_id = n
             .trim_opt(raw.pbs.backup_id)
-            .unwrap_or_else(|| format!("{}-k8s-pv", n.hostname()));
+            .unwrap_or_else(|| format!("{}-backup", n.hostname()));
         let pbs = Pbs {
             repos,
             keyfile,
@@ -257,7 +252,9 @@ impl Config {
                         let vg = n.trim_opt(vg).ok_or_else(|| {
                             anyhow!("[restore.targets.{name}] vg must not be empty")
                         })?;
-                        let thinpool = n.trim_opt(thinpool);
+                        let thinpool = n.trim_opt(thinpool).ok_or_else(|| {
+                            anyhow!("[restore.targets.{name}] thinpool must not be empty")
+                        })?;
                         RestoreTarget::LvmThin { vg, thinpool }
                     }
                 };

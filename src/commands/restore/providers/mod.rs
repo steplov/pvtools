@@ -53,16 +53,13 @@ impl<'a> ProviderRegistry<'a> {
                 RestoreTarget::LvmThin { vg, thinpool } => {
                     let lvm_port = self.ctx.tools.lvm().expect("lvm enabled");
                     let pvesh = self.ctx.tools.pvesh();
-                    let tp = thinpool
-                        .clone()
-                        .expect("[lvmthin target] thinpool is required");
                     out.push(Box::new(lvmthin::LvmthinRestore::new(
                         self.snapshot,
                         lvm_port,
                         pvesh,
                         self.matcher.clone(),
                         vg.clone(),
-                        tp,
+                        thinpool.clone(),
                         tname.clone(),
                     )));
                 }

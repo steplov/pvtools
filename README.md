@@ -100,7 +100,7 @@ password_file = "./token"
 # Optional PBS namespace. Empty = PBS root.
 ns            = "pv"
 
-# Backup group. Empty -> "<hostname>-k8s-pv".
+# Backup group. Empty -> "<hostname>-backup".
 backup_id     = ""
 
 [pbs.repos]
@@ -118,7 +118,7 @@ offsite = "root@pam!pve@203.0.113.5:offsite-store"
 # pv_exclude_re is a Rust regex; if set → exclude matching PV names.
 [backup]
 pv_prefixes   = ["vm-9999-", "vm-7777-"]
-pv_exclude_re = "plex-transcode"
+pv_exclude_re = "tmp$"
 
 # Default repository alias for backups. CLI --target overrides this.
 [backup.target]

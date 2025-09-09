@@ -224,7 +224,7 @@ mod tests {
             "lvm-pve".to_string(),
             RestoreTarget::LvmThin {
                 vg: "pve".to_string(),
-                thinpool: Some("data".to_string()),
+                thinpool: "data".to_string(),
             },
         );
 
