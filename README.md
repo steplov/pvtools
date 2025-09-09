@@ -1,8 +1,12 @@
 # pvtools
 
-Proxmox node disk backup/restore helper for ZFS + LVM-thin storage with Proxmox Backup Server.
+![Build Status](https://github.com/steplov/pvtools/workflows/CI/badge.svg)
+![Latest Release](https://img.shields.io/github/v/release/steplov/pvtools)
+![Downloads](https://img.shields.io/github/downloads/steplov/pvtools/total)
 
-Manages backup and restore of dynamically created disks on Proxmox nodes, particularly useful for disks created by [Proxmox CSI plugin](https://github.com/sergelogvinov/proxmox-csi-plugin) but works with any Proxmox storage.
+## What is pvtools?
+
+pvtools is a command-line utility that simplifies backup and restore operations for Proxmox virtual machine disks stored on ZFS and LVM-thin storage backends. It integrates seamlessly with Proxmox Backup Server (PBS) and is particularly valuable for managing dynamically created volumes in Kubernetes environments using the Proxmox CSI plugin.
 
 ## Usage
 
