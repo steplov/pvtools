@@ -37,11 +37,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools jq
 
-      # Extract tag version
       - id: tag_version
         run: echo "tag=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
@@ -50,21 +46,17 @@ jobs:
           tag="${{ steps.tag_version.outputs.tag }}"
           sed -i "s/^version = \".*\"/version = \"${tag}\"/" Cargo.toml
 
-      # Build
-      - run: cargo build --release --target x86_64-unknown-linux-musl
+      - run: cargo build --release
 
-      # Prepare release dir
       - name: Prepare release artifacts
         run: |
           mkdir release
-          cp target/x86_64-unknown-linux-musl/release/pvtools release/pvtools-linux-x86_64
+          cp target/release/pvtools release/pvtools-linux-x86_64
           cp examples/config.example.toml release/
 
-      # Create tar.gz
       - name: Create archive
         run: tar -czf pvtools-${{ steps.tag_version.outputs.tag }}-linux-x86_64.tar.gz -C release .
 
-      # Upload to GitHub Release
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
