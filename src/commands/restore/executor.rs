@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashSet};
 
 use anyhow::{Context, Result, bail};
-use tracing as log;
+use tracing;
 
 use super::providers::ProviderRegistry;
 use crate::{
     AppCtx,
-    tooling::{PbsSnapshot, dd::DdOpts},
+    tooling::{dd::DdOpts, pbs::PbsSnapshot},
     ui,
     utils::{
         exec_policy::with_dry_run_enabled,
@@ -73,7 +73,7 @@ impl TryFrom<&super::RestoreRunArgs> for RunOpts {
 }
 
 pub fn list_snapshots(ctx: &AppCtx, opts: ListSnapshotsOpts) -> Result<()> {
-    let repo = ctx.cfg.pbs.repo_source(opts.source.as_deref())?;
+    let repo = ctx.cfg.resolve_backup_repo(opts.source.as_deref())?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
     let snaps = ctx.tools.pbs().snapshots(repo, ns_opt)?;
 
@@ -120,7 +120,7 @@ pub fn list_snapshots(ctx: &AppCtx, opts: ListSnapshotsOpts) -> Result<()> {
 }
 
 pub fn list_archives(ctx: &AppCtx, opts: ListArchivesOpts) -> Result<()> {
-    let repo = ctx.cfg.pbs.repo_source(opts.source.as_deref())?;
+    let repo = ctx.cfg.resolve_backup_repo(opts.source.as_deref())?;
     let ns_opt = ctx.cfg.pbs.ns.as_deref();
     let point = &opts.snapshot;
     let snaps = ctx.tools.pbs().snapshots(repo, ns_opt)?;
@@ -132,7 +132,6 @@ pub fn list_archives(ctx: &AppCtx, opts: ListArchivesOpts) -> Result<()> {
     let snap = pick_snapshot(&snaps, &ctx.cfg.pbs.backup_id, point.clone())?;
     let registry = ProviderRegistry::new(ctx, Some(snap));
     let providers = registry.build();
-
     let rows: Vec<String> = providers
         .iter()
         .flat_map(|p| p.list_archives(snap))
@@ -150,7 +149,7 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
     let _lock = LockGuard::try_acquire("pvtool-restore")?;
 
     with_dry_run_enabled(opts.dry_run, || -> Result<()> {
-        let repo = ctx.cfg.pbs.repo_source(opts.source.as_deref())?;
+        let repo = ctx.cfg.resolve_backup_repo(opts.source.as_deref())?;
         let ns_opt = ctx.cfg.pbs.ns.as_deref();
         let point = &opts.snapshot;
         let snaps = ctx.tools.pbs().snapshots(repo, ns_opt)?;
@@ -195,16 +194,14 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
         }
 
         if items.is_empty() {
-            log::info!("nothing to restore");
+            tracing::info!("nothing to restore");
             return Ok(());
         }
 
         items.ensure_unique_targets()?;
 
-        log::info!("Plan");
         ui::log_pbs_info(repo, ns_opt, &ctx.cfg.pbs.backup_id, Some(snap.backup_time));
         ui::log_archives(&items);
-        log::info!("\n");
 
         let dd_opts = DdOpts::default();
 
@@ -223,7 +220,7 @@ pub fn restore_run(ctx: &AppCtx, opts: RunOpts) -> Result<()> {
                 .with_context(|| format!("restore pipeline for {}", i.archive))?;
         }
 
-        log::info!("done");
+        tracing::info!("done");
         Ok(())
     })
 }

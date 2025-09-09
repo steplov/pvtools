@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Result, anyhow};
-use tracing as log;
+use tracing;
 
 use crate::utils::{
     exec_policy,
@@ -54,7 +54,7 @@ impl BlockPort for BlockCli {
 
     fn wait_for_block_with(&self, dev: &Path, timeout: Duration, delay: Duration) -> Result<()> {
         if exec_policy::is_dry_run() {
-            log::info!("[wait] DRY-RUN: skip waiting for {}", dev.display());
+            tracing::info!("[wait] DRY-RUN: skip waiting for {}", dev.display());
             return Ok(());
         }
 
@@ -66,7 +66,7 @@ impl BlockPort for BlockCli {
                 return Ok(());
             }
             if start.elapsed() > Duration::from_secs(1) && !warned {
-                log::info!("[wait] device {} not ready, waiting…", dev.display());
+                tracing::info!("[wait] device {} not ready, waiting…", dev.display());
                 warned = true;
             }
 

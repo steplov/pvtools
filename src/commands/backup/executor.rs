@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tracing as log;
+use tracing;
 
 use super::providers::ProviderRegistry;
 use crate::{
@@ -14,7 +14,7 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
     let _lock = LockGuard::try_acquire("pvtool-backup")?;
 
     with_dry_run_enabled(dry_run, || {
-        let repo = ctx.cfg.pbs.repo_target(target)?;
+        let repo = ctx.cfg.resolve_backup_repo(target)?;
         let ns_opt = ctx.cfg.pbs.ns.as_deref();
         let registry = ProviderRegistry::new(ctx);
         let mut providers = registry.build();
@@ -28,7 +28,7 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
         }
 
         if volumes.is_empty() {
-            log::info!("nothing to backup");
+            tracing::info!("nothing to backup");
             return Ok(());
         }
 
@@ -57,14 +57,12 @@ pub fn backup(ctx: &AppCtx, target: Option<&str>, dry_run: bool) -> Result<()> {
             .pbs()
             .backup(repo, ns_opt, &ctx.cfg.pbs.backup_id, keyfile, &items)?;
 
-        log::info!("\n");
-
         if let Ok(ts) = latest_backup_time(ctx, repo, ns_opt, &ctx.cfg.pbs.backup_id) {
             ui::log_pbs_info(repo, ns_opt, &ctx.cfg.pbs.backup_id, Some(ts));
         } else {
-            log::info!("Backup finished, but latest snapshot time is not visible yet.");
+            tracing::info!("Backup finished, but latest snapshot time is not visible yet.");
         }
-        log::info!("Done");
+        tracing::info!("Done");
         Ok(())
     })
 }
@@ -83,7 +81,7 @@ pub fn list_archives(ctx: &AppCtx) -> Result<()> {
     }
 
     if volumes.is_empty() {
-        log::info!("nothing to backup");
+        tracing::info!("nothing to backup");
         return Ok(());
     }
 

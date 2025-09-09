@@ -1,11 +1,11 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
-use tracing as log;
+use tracing;
 
 use crate::{
     commands::backup::providers::Provider,
-    config::{Config, Pbs},
+    config::{Backup, Config},
     tooling::{BlockPort, LvmPort, PveshPort, lvm::LvInfo, pvesh::Storage},
     utils::{exec_policy, naming::create_archive_name, time::current_epoch},
     volume::Volume,
@@ -28,7 +28,7 @@ struct LvmMeta {
 
 pub struct LvmThinProvider<'a> {
     vgs_set: HashSet<String>,
-    pbs: &'a Pbs,
+    backup: &'a Backup,
     run_ts: u64,
     cleanup: Cleanup,
     lvm: Arc<dyn LvmPort>,
@@ -44,13 +44,15 @@ impl<'a> LvmThinProvider<'a> {
         pvesh: Arc<dyn PveshPort>,
     ) -> Self {
         let l = cfg
+            .backup
+            .sources
             .lvmthin
             .as_ref()
             .expect("[lvmthin] missing in config (provider disabled)");
 
         Self {
             vgs_set: l.vgs.iter().map(|s| s.trim().to_string()).collect(),
-            pbs: &cfg.pbs,
+            backup: &cfg.backup,
             run_ts: current_epoch(),
             cleanup: Cleanup::new(lvm.clone()),
             lvm,
@@ -66,7 +68,7 @@ impl<'a> LvmThinProvider<'a> {
         if !self.vgs_set.contains(&lv.vg_name) {
             return Err(Reject::VgNotAllowed(&lv.vg_name));
         }
-        if !self.pbs.pv_allows(&lv.lv_name) {
+        if !self.backup.pv_allows(&lv.lv_name) {
             return Err(Reject::PvDenied);
         }
         Ok(())
@@ -98,19 +100,6 @@ impl<'a> Provider for LvmThinProvider<'a> {
 
                     let storage_id = find_storage(&storages, &lv.vg_name)?;
 
-                    let a = Volume {
-                        storage: storage_id.to_string(),
-                        disk: lv.lv_name.clone(),
-                        archive: archive.clone(),
-                        device: names.device.clone(),
-                        meta: Some(Arc::new(LvmMeta {
-                            vg: lv.vg_name.clone(),
-                            lv: lv.lv_name.clone(),
-                            run_ts: self.run_ts,
-                        })),
-                    };
-                    dbg!(a);
-
                     out.push(Volume {
                         storage: storage_id.to_string(),
                         disk: lv.lv_name.clone(),
@@ -123,16 +112,16 @@ impl<'a> Provider for LvmThinProvider<'a> {
                         })),
                     });
                 }
-                Err(Reject::NotThin) => log::trace!("skip {}: segtype != thin", lv.lv_name),
+                Err(Reject::NotThin) => tracing::debug!("skip {}: segtype != thin", lv.lv_name),
                 Err(Reject::VgNotAllowed(vg)) => {
-                    log::trace!("skip {}: vg '{}' not allowed", lv.lv_name, vg)
+                    tracing::debug!("skip {}: vg '{}' not allowed", lv.lv_name, vg)
                 }
-                Err(Reject::PvDenied) => log::trace!("skip {}: pv_allows=false", lv.lv_name),
+                Err(Reject::PvDenied) => tracing::debug!("skip {}: pv_allows=false", lv.lv_name),
             }
         }
 
         if out.is_empty() {
-            log::debug!("lvmthin: no candidate volumes");
+            tracing::debug!("lvmthin: no candidate volumes");
         }
 
         Ok(out)
@@ -187,7 +176,7 @@ impl Drop for Cleanup {
         if let Some(lvm) = &self.lvm {
             for s in self.snaps.drain(..) {
                 if let Err(e) = lvm.lvremove_force(&s) {
-                    log::warn!("[cleanup] lvremove -f {} failed: {e}", s);
+                    tracing::warn!("[cleanup] lvremove -f {} failed: {e}", s);
                 }
             }
         }
@@ -237,7 +226,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{Config, LvmThin, Pbs},
+        config::{Backup, BackupSources, BackupTarget, Config, LvmThin, Pbs, Restore},
         tooling::{BlockPort, LvmPort, lvm::LvInfo},
         utils::process::ProcessRunner,
     };
@@ -319,15 +308,22 @@ mod tests {
                 password: None,
                 ns: None,
                 backup_id: "test".to_string(),
+            },
+            backup: Backup {
+                sources: BackupSources {
+                    zfs: None,
+                    lvmthin: Some(LvmThin {
+                        vgs: vec!["pve".to_string()],
+                    }),
+                },
+                target: BackupTarget {
+                    repo: Some("nas".to_string()),
+                },
                 pv_prefixes: vec!["vm-".to_string()],
                 pv_exclude_re: None,
                 pv_exclude_re_src: None,
             },
-            zfs: None,
-            lvmthin: Some(LvmThin {
-                vgs: vec!["pve".to_string()],
-                restore: None,
-            }),
+            restore: Restore::default(),
         }
     }
 

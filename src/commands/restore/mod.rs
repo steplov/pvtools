@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 use crate::AppCtx;
 
 mod executor;
+mod matcher;
 mod providers;
 
 #[derive(Debug, Args)]
@@ -33,30 +34,22 @@ pub struct ListSnapshotsArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ListArchivesArgs {
-    /// Source PBS repo name
     #[arg(long)]
     pub source: Option<String>,
-    /// Snapshot to inspect: "latest" (default) or epoch
     #[arg(long, default_value = "latest")]
     pub snapshot: String,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct RestoreRunArgs {
-    /// Source PBS repo name
     #[arg(long)]
     pub source: Option<String>,
-    /// Snapshot to restore from: "latest" (default) or epoch
     #[arg(long, default_value = "latest")]
     pub snapshot: String,
-    /// Restore these archives only (can be repeated).
-    /// Accepts full PBS filename (e.g. zfs_vm-...img.fidx/img)
     #[arg(long = "archive")]
     pub archives: Vec<String>,
-    /// Restore all archives from the snapshot
     #[arg(long)]
     pub all: bool,
-    /// Show what would be restored without executing
     #[arg(long)]
     pub dry_run: bool,
 }

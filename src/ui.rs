@@ -1,20 +1,19 @@
 use prettytable::{Cell, Row, Table};
-use tracing as log;
 
 use crate::{utils::time::fmt_utc, volume::Volume};
 
 pub fn log_pbs_info(repo: &str, ns: Option<&str>, backup_id: &str, ts: Option<u64>) {
     let ns_disp = ns.unwrap_or("<root>");
 
-    log::info!("Repo: {repo}");
-    log::info!("Namespace: {ns_disp}");
+    tracing::info!("Repo: {repo}");
+    tracing::info!("Namespace: {ns_disp}");
     match ts {
         Some(ts) => {
             let when = fmt_utc(ts).unwrap_or_else(|_| ts.to_string());
-            log::info!("Backup: host/{backup_id}/{}", when);
+            tracing::info!("Backup: host/{backup_id}/{}", when);
         }
         None => {
-            log::info!("Group: host/{backup_id}");
+            tracing::info!("Group: host/{backup_id}");
         }
     }
 }
@@ -33,7 +32,7 @@ pub fn log_archives(vols: &[Volume]) {
 
 pub fn log_pbs_archives(archives: Vec<String>) {
     if archives.is_empty() {
-        log::info!("<no archives>");
+        tracing::info!("<no archives>");
     } else {
         let mut table = Table::new();
         table.set_titles(Row::new(vec![Cell::new("File")]));
@@ -48,7 +47,7 @@ pub fn log_pbs_archives(archives: Vec<String>) {
 
 pub fn log_snapshots(snapshots: Vec<Vec<String>>) {
     if snapshots.is_empty() {
-        log::info!("<no snapshots>");
+        tracing::info!("<no snapshots>");
     } else {
         let mut table = Table::new();
         table.set_titles(Row::new(vec![Cell::new("Time (UTC)"), Cell::new("Files")]));

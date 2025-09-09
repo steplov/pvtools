@@ -1,40 +1,81 @@
-# Example configuration file for pvtools
-# Copy to ./config.toml and adjust values for your environment
-
+# =========================
+# PBS (Proxmox Backup Server)
+# =========================
 [pbs]
-# Path to client-side encryption key (optional, can be empty)
+# Optional client-side encryption key (PEM). Relative paths resolve from this file's dir.
 keyfile       = "./enc.key"
-# Path to a file containing the token (file content = secret without newline)
+
+# Token/secret file. File content = secret (no trailing newline).
 password_file = "./token"
 
-# Namespace on Proxmox Backup Server (can be empty)
+# Optional PBS namespace. Empty = PBS root.
 ns            = "pv"
-# If empty, defaults to <hostname>-k8s-pv
+
+# Backup group. Empty -> "<hostname>-k8s-pv".
 backup_id     = ""
-# List of PV name prefixes to include
-pv_prefixes   = ["vm-9999-", "vm-7777-"]
-# Regex of PV names to exclude
-pv_exclude_re = "plex-transcode"
 
 [pbs.repos]
-# Define backup repositories here
+# Repository aliases. Use these names on CLI and in [backup.target].repo.
+# Alias rules: [A-Za-z0-9_-], len 1..32.
 nas     = "root@pam!pve@10.10.0.24:nas-store"
 s3      = "root@pam!pve@10.10.0.24:s3-store"
 offsite = "root@pam!pve@203.0.113.5:offsite-store"
 
-[zfs]
-# List of ZFS pools (array, not a single string)
-pools = ["tank"]
+# =========================
+# BACKUP
+# =========================
+# Global PV discovery filters.
+# If pv_prefixes is empty → allow all.
+# pv_exclude_re is a Rust regex; if set → exclude matching PV names.
+[backup]
+pv_prefixes   = ["vm-9999-", "vm-7777-"]
+pv_exclude_re = "plex-transcode"
 
-[zfs.restore]
-# Destination root pool for restores
-dest_root = "tank"
+# Default repository alias for backups. CLI --target overrides this.
+[backup.target]
+repo = "nas"
 
-[lvmthin]
-# List of volume groups with thinpools
-vgs = ["pve"]
+# Discovery sources used when scanning for PVs to back up.
+[backup.sources.zfs]
+pools = ["tank"]          # ZFS pools to scan
 
-[lvmthin.restore]
-# Destination volume group and thinpool for restores
-vg = "pve"
-thinpool = "data"
+[backup.sources.lvmthin]
+vgs = ["pve"]             # LVM VGs with thinpools to scan
+
+# =========================
+# RESTORE
+# =========================
+
+# 1) Restore targets — where data will be restored.
+#    This is a MAP of named targets (NOT an array). One table per target.
+#    Each has a type and type-specific fields.
+
+[restore.targets.zfs_pv]
+type = "zfs"              # Required. Provider type name.
+root = "tank"             # ZFS root: results in /dev/zvol/tank/<leaf> or a file under its mountpoint.
+
+[restore.targets.lvm_pve]
+type = "lvmthin"          # Required. Provider type name.
+vg = "pve"                # LVM volume group
+thinpool = "data"         # LVM thinpool (required)
+
+# 2) Routing rules — pick a target based on the archive's SOURCE provider and optional filename regex.
+#    First match wins, top to bottom. Keys with dots MUST be quoted in TOML.
+#    If no regex is given, the rule is a wildcard for that provider.
+
+[[restore.rules]]
+"match.provider" = "zfs"
+target = "zfs_pv"         # route all zfs-provider archives here (wildcard rule)
+
+[[restore.rules]]
+"match.provider"      = "lvmthin"
+"match.archive_regex" = 'vm-7777-.*'   # only LVM-thin archives matching this regex go to lvm_pve
+target = "lvm_pve"
+
+# 3) Default/fallback. Used if nothing matched.
+#    Actual resolution order:
+#      a) first rule match (above),
+#      b) else: first defined target of the same provider type ("zfs" or "lvmthin"),
+#      c) else: default_target (cross-type restore is allowed).
+[restore]
+default_target = "zfs_pv"

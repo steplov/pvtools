@@ -24,7 +24,7 @@ impl<'a> ProviderRegistry<'a> {
         let mut out: Vec<Box<dyn Provider + 'a>> = Vec::new();
         let cfg = &self.ctx.cfg;
 
-        if cfg.zfs.is_some() {
+        if cfg.backup.sources.zfs.is_some() {
             let zfs_port = self.ctx.tools.zfs().expect("zfs enabled");
 
             out.push(Box::new(zfs::ZfsProvider::new(
@@ -34,7 +34,7 @@ impl<'a> ProviderRegistry<'a> {
                 self.ctx.tools.pvesh(),
             )));
         }
-        if cfg.lvmthin.is_some() {
+        if cfg.backup.sources.lvmthin.is_some() {
             let lvm_port = self.ctx.tools.lvm().expect("lvm enabled");
 
             out.push(Box::new(lvmthin::LvmThinProvider::new(

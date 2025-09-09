@@ -9,13 +9,9 @@ use anyhow::{Result, bail};
 
 #[derive(Debug, Clone)]
 pub struct Volume {
-    /// Proxmox storage ID (e.g. "local-zfs", "local-lvm")
     pub storage: String,
-    /// Disk name without path (e.g. "vm-123.raw")
     pub disk: String,
-    /// Final PBS archive file name (must end with ".img")
     pub archive: String,
-    /// Block device to read from/write to (e.g. /dev/zvol/... or /dev/<vg>/<snap>)
     pub device: PathBuf,
     pub meta: Option<Arc<dyn Any + Send + Sync>>,
 }

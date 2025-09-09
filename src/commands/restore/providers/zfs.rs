@@ -6,57 +6,64 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
-    commands::restore::providers::Provider,
-    config::Config,
-    tooling::{FsPort, PbsSnapshot, PveshPort, ZfsPort, pvesh::Storage},
+    commands::restore::{matcher::RestoreMatcher, providers::Provider},
+    tooling::{
+        FsPort, PveshPort, ZfsPort,
+        pbs::{PbsFile, PbsSnapshot},
+        pvesh::Storage,
+    },
     utils::naming::parse_archive_name,
     volume::Volume,
 };
 
 pub struct ZfsRestore<'a> {
     dest_root: String,
+    target_name: String,
     snapshot: Option<&'a PbsSnapshot>,
     zfs: Arc<dyn ZfsPort>,
     pvesh: Arc<dyn PveshPort>,
     fs: Arc<dyn FsPort>,
+    matcher: Arc<RestoreMatcher>,
 }
 
 impl<'a> ZfsRestore<'a> {
     pub fn new(
-        cfg: &Config,
         snapshot: Option<&'a PbsSnapshot>,
         zfs: Arc<dyn ZfsPort>,
         pvesh: Arc<dyn PveshPort>,
         fs: Arc<dyn FsPort>,
+        matcher: Arc<RestoreMatcher>,
+        dest_root: String,
+        target_name: String,
     ) -> Self {
-        let z = cfg
-            .zfs
-            .as_ref()
-            .expect("[zfs] missing in config (restore disabled)");
-
-        let dest_root = z
-            .restore
-            .as_ref()
-            .map(|r| r.dest_root.clone())
-            .expect("[zfs.restore] missing dest_root");
+        assert!(!dest_root.trim().is_empty(), "[zfs target] empty root");
+        assert!(
+            !target_name.trim().is_empty(),
+            "[zfs target] empty target_name"
+        );
 
         Self {
             dest_root,
+            target_name,
             snapshot,
             zfs,
             pvesh,
             fs,
+            matcher,
         }
+    }
+    #[inline]
+    fn routes_to_me(&self, f: &PbsFile) -> bool {
+        if let Ok((provider, _leaf, _id)) = parse_archive_name(&f.filename)
+            && let Some(tname) = self.matcher.pick_target_name(&provider, f)
+        {
+            return tname == self.target_name;
+        }
+        false
     }
 
     fn resolve_dataset_target(&self, archive: &str) -> Result<(PathBuf, String)> {
-        let (provider, leaf, _id) = parse_archive_name(archive)?;
-
-        if provider != "zfs" {
-            bail!("not a zfs archive: {archive}");
-        }
-
-        let dataset = format!("{}/{}", self.dest_root, leaf);
+        let (_provider, leaf, _id) = parse_archive_name(archive)?;
 
         let (size_bytes, file_name_for_err) = {
             let snap = self
@@ -67,9 +74,10 @@ impl<'a> ZfsRestore<'a> {
                 .iter()
                 .find(|f| f.filename == archive)
                 .ok_or_else(|| anyhow!("archive {archive} not found in snapshot"))?;
-            let sz = file.size;
-            (sz, file.filename.clone())
+
+            (file.size, file.filename.clone())
         };
+        let dataset = format!("{}/{}", self.dest_root, leaf);
 
         let mp = match self.zfs.dataset_mountpoint(&dataset) {
             Ok(mp) => mp,
@@ -108,7 +116,7 @@ impl<'a> ZfsRestore<'a> {
 
 impl<'a> Provider for ZfsRestore<'a> {
     fn name(&self) -> &'static str {
-        "zfs-restore"
+        "zfs"
     }
 
     fn collect_restore(&mut self, archive: Option<&str>, all: bool) -> Result<Vec<Volume>> {
@@ -118,7 +126,9 @@ impl<'a> Provider for ZfsRestore<'a> {
 
         match (archive, all, self.snapshot) {
             (Some(a), _, Some(_snap)) => {
-                if a.starts_with("zfs_") {
+                if let Some(file) = _snap.files.iter().find(|f| f.filename == a)
+                    && self.routes_to_me(file)
+                {
                     let (target, leaf) = self.resolve_dataset_target(a)?;
                     out.push(Volume {
                         storage: storage_id.to_string(),
@@ -131,7 +141,7 @@ impl<'a> Provider for ZfsRestore<'a> {
             }
             (None, true, Some(snap)) => {
                 for f in &snap.files {
-                    if f.filename.starts_with("zfs_") {
+                    if self.routes_to_me(f) {
                         let (target, leaf) = self.resolve_dataset_target(&f.filename)?;
                         out.push(Volume {
                             storage: storage_id.to_string(),
@@ -145,7 +155,7 @@ impl<'a> Provider for ZfsRestore<'a> {
             }
             (Some(a), _, None) => bail!("no snapshot context for archive {a}"),
             (None, true, None) => bail!("no snapshot context provided for restore-all"),
-            (None, false, _) => { /* ничего не выбирали */ }
+            (None, false, _) => {}
         }
 
         Ok(out)
@@ -154,7 +164,7 @@ impl<'a> Provider for ZfsRestore<'a> {
     fn list_archives(&self, snap: &PbsSnapshot) -> Vec<String> {
         snap.files
             .iter()
-            .filter(|f| f.filename.starts_with("zfs_"))
+            .filter(|f| self.routes_to_me(f))
             .map(|f| f.filename.clone())
             .collect()
     }
@@ -177,13 +187,14 @@ fn find_storage<'a>(storages: &'a [Storage], pool: &str) -> Result<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::BTreeMap, sync::Arc};
 
     use anyhow::{Ok, Result};
 
     use super::*;
     use crate::{
-        config::{Config, Pbs, Zfs, ZfsRestore as ZfsRestoreConfig},
+        commands::restore::matcher::RestoreMatcher,
+        config::{Backup, Config, Pbs, Restore, RestoreTarget},
         tooling::{FsPort, PveshPort, ZfsPort, pbs::PbsFile, pvesh::Storage},
     };
 
@@ -207,8 +218,8 @@ mod tests {
         fn list_volumes(&self, _pool: &str) -> Result<Vec<crate::tooling::zfs::ZfsVolume>> {
             Ok(vec![])
         }
-        fn guid_map(&self, _pool: &str) -> Result<HashMap<String, String>> {
-            Ok(HashMap::new())
+        fn guid_map(&self, _pool: &str) -> Result<std::collections::HashMap<String, String>> {
+            Ok(std::collections::HashMap::new())
         }
         fn snapshot(&self, _name: &str) -> Result<()> {
             Ok(())
@@ -249,24 +260,32 @@ mod tests {
     }
 
     fn test_config() -> Config {
+        let mut targets = BTreeMap::new();
+        targets.insert(
+            "zfs-tank".to_string(),
+            RestoreTarget::Zfs {
+                root: "tank".to_string(),
+            },
+        );
+
         Config {
             pbs: Pbs {
-                repos: HashMap::new(),
+                repos: std::collections::HashMap::new(),
                 keyfile: None,
                 password: None,
                 ns: None,
                 backup_id: "test".to_string(),
-                pv_prefixes: vec![],
-                pv_exclude_re: None,
-                pv_exclude_re_src: None,
             },
-            zfs: Some(Zfs {
-                pools: vec!["tank".to_string()],
-                restore: Some(ZfsRestoreConfig {
-                    dest_root: "tank".to_string(),
-                }),
-            }),
-            lvmthin: None,
+            backup: Backup::default(),
+            restore: Restore {
+                targets,
+                rules: vec![crate::config::RestoreRule {
+                    match_provider: "zfs".to_string(),
+                    match_archive_regex: None,
+                    target: "zfs-tank".to_string(),
+                }],
+                default_target: None,
+            },
         }
     }
 
@@ -289,7 +308,6 @@ mod tests {
 
     #[test]
     fn resolve_dataset_target_zvol() {
-        let cfg = test_config();
         let snap = test_snapshot();
         let zfs = Arc::new(MockZfs {
             exists: true,
@@ -297,7 +315,17 @@ mod tests {
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let restore = ZfsRestore::new(
+            Some(&snap),
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
 
         let (target, _) = restore
             .resolve_dataset_target("zfs_vm-123_raw_abcd1234.img")
@@ -307,7 +335,6 @@ mod tests {
 
     #[test]
     fn resolve_dataset_target_mounted() {
-        let cfg = test_config();
         let snap = test_snapshot();
         let zfs = Arc::new(MockZfs {
             exists: true,
@@ -315,7 +342,17 @@ mod tests {
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let restore = ZfsRestore::new(
+            Some(&snap),
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
 
         let (target, _) = restore
             .resolve_dataset_target("zfs_vm-123_raw_abcd1234.img")
@@ -324,23 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dataset_target_rejects_non_zfs() {
-        let cfg = test_config();
-        let zfs = Arc::new(MockZfs {
-            exists: true,
-            mountpoint: None,
-        });
-        let pvesh = Arc::new(MockPvesh);
-        let fs = Arc::new(MockFs);
-        let restore = ZfsRestore::new(&cfg, None, zfs, pvesh, fs);
-
-        let result = restore.resolve_dataset_target("lvmthin_vm-123_raw_abcd1234.img");
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn collect_restore_single_archive() {
-        let cfg = test_config();
         let snap = test_snapshot();
         let zfs = Arc::new(MockZfs {
             exists: true,
@@ -348,7 +369,17 @@ mod tests {
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let mut restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let mut restore = ZfsRestore::new(
+            Some(&snap),
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
 
         let items = restore
             .collect_restore(Some("zfs_vm-123_raw_abcd1234.img"), false)
@@ -360,7 +391,6 @@ mod tests {
 
     #[test]
     fn collect_restore_all_archives() {
-        let cfg = test_config();
         let snap = test_snapshot();
         let zfs = Arc::new(MockZfs {
             exists: true,
@@ -368,7 +398,17 @@ mod tests {
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let mut restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let mut restore = ZfsRestore::new(
+            Some(&snap),
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
 
         let items = restore.collect_restore(None, true).unwrap();
         assert_eq!(items.len(), 1);
@@ -377,7 +417,6 @@ mod tests {
 
     #[test]
     fn list_archives_filters_zfs() {
-        let cfg = test_config();
         let snap = test_snapshot();
         let zfs = Arc::new(MockZfs {
             exists: true,
@@ -385,7 +424,17 @@ mod tests {
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let restore = ZfsRestore::new(&cfg, Some(&snap), zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let restore = ZfsRestore::new(
+            Some(&snap),
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
 
         let archives = restore.list_archives(&snap);
         assert_eq!(archives.len(), 1);
@@ -394,14 +443,23 @@ mod tests {
 
     #[test]
     fn resolve_dataset_target_missing_dataset_errors() {
-        let cfg = test_config();
         let zfs = Arc::new(MockZfs {
             exists: false,
             mountpoint: None,
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let restore = ZfsRestore::new(&cfg, None, zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let restore = ZfsRestore::new(
+            None,
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
         assert!(
             restore
                 .resolve_dataset_target("zfs_vm-123_raw_abcd1234.img")
@@ -411,14 +469,23 @@ mod tests {
 
     #[test]
     fn collect_restore_all_requires_snapshot() {
-        let cfg = test_config();
         let zfs = Arc::new(MockZfs {
             exists: true,
             mountpoint: None,
         });
         let pvesh = Arc::new(MockPvesh);
         let fs = Arc::new(MockFs);
-        let mut restore = ZfsRestore::new(&cfg, None, zfs, pvesh, fs);
+        let cfg = test_config();
+        let matcher = Arc::new(RestoreMatcher::new(&cfg).unwrap());
+        let mut restore = ZfsRestore::new(
+            None,
+            zfs,
+            pvesh,
+            fs,
+            matcher,
+            "tank".to_string(),
+            "zfs-tank".to_string(),
+        );
         assert!(restore.collect_restore(None, true).is_err());
     }
 }

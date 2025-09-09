@@ -19,7 +19,7 @@ pub use block::{BlockCli, BlockPort};
 pub use dd::{DdCli, DdPort};
 pub use fs::{FsCli, FsPort};
 pub use lvm::{LvmCli, LvmPort};
-pub use pbs::{PbsCli, PbsPort, PbsSnapshot};
+pub use pbs::{PbsCli, PbsPort};
 pub use pvesh::{PveshCli, PveshPort};
 pub use zfs::{ZfsCli, ZfsPort};
 
@@ -40,12 +40,12 @@ impl Toolbox {
         let pbs_cfg = Arc::new(cfg.pbs.clone());
         let pbs: Arc<dyn PbsPort> = Arc::new(PbsCli::new(runner.clone(), pbs_cfg));
 
-        let zfs: Option<Arc<dyn ZfsPort>> = if cfg.zfs.is_some() {
+        let zfs: Option<Arc<dyn ZfsPort>> = if cfg.backup.sources.zfs.is_some() {
             Some(Arc::new(ZfsCli::new(runner.clone())) as Arc<dyn ZfsPort>)
         } else {
             None
         };
-        let lvm: Option<Arc<dyn LvmPort>> = if cfg.lvmthin.is_some() {
+        let lvm: Option<Arc<dyn LvmPort>> = if cfg.backup.sources.lvmthin.is_some() {
             Some(Arc::new(LvmCli::new(runner.clone())) as Arc<dyn LvmPort>)
         } else {
             None
@@ -105,12 +105,12 @@ fn ensure_bins_for_cfg(cfg: &Config) -> Result<()> {
     for b in block::REQ_BINS {
         all.insert(b);
     }
-    if cfg.zfs.is_some() {
+    if cfg.backup.sources.zfs.is_some() {
         for b in zfs::REQ_BINS {
             all.insert(b);
         }
     }
-    if cfg.lvmthin.is_some() {
+    if cfg.backup.sources.lvmthin.is_some() {
         for b in lvm::REQ_BINS {
             all.insert(b);
         }

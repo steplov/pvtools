@@ -30,7 +30,7 @@ pub struct BackupRunArgs {
 #[derive(Args, Debug)]
 pub struct ListArchivesArgs {
     #[arg(long)]
-    pub target: String,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

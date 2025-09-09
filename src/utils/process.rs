@@ -8,15 +8,12 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::utils::exec_policy;
 
-/// Value for environment variables
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub enum EnvValue {
     Plain(String),
     Secret(String),
 }
 
-/// How to configure stdio
 #[derive(Clone, Debug)]
 pub enum StdioSpec {
     Inherit,
@@ -35,7 +32,6 @@ impl StdioSpec {
     }
 }
 
-/// Command specification
 #[derive(Clone, Debug)]
 pub struct CmdSpec {
     program: String,
@@ -169,7 +165,6 @@ impl Pipeline {
         self.cmds.is_empty()
     }
 
-    /// Base rendering for dry-run/logging
     pub fn render(&self) -> String {
         self.cmds
             .iter()
@@ -224,7 +219,6 @@ impl Runner for ProcessRunner {
             let bin = self.resolve_bin(&spec.program);
             let mut cmd = spec.to_command(bin);
 
-            // stdin
             if i == 0 {
                 cmd.stdin(spec.stdin.to_stdio());
             } else {
@@ -234,21 +228,18 @@ impl Runner for ProcessRunner {
                 cmd.stdin(stdin);
             }
 
-            // stdout
             if i == n - 1 {
                 cmd.stdout(spec.stdout.to_stdio());
             } else {
                 cmd.stdout(Stdio::piped());
             }
 
-            // stderr
             cmd.stderr(spec.stderr.to_stdio());
 
             let mut child = cmd
                 .spawn()
                 .with_context(|| format!("spawn {}", spec.render()))?;
 
-            // prepare pipe for next stage
             prev_stdout = if i == n - 1 {
                 None
             } else {

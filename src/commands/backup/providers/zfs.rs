@@ -1,11 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
-use tracing as log;
+use tracing;
 
 use crate::{
     commands::backup::providers::Provider,
-    config::{Config, Pbs},
+    config::{Backup, Config},
     tooling::{BlockPort, PveshPort, ZfsPort, pvesh::Storage},
     utils::{exec_policy, naming::create_archive_name, path::dataset_leaf, time::current_epoch},
     volume::Volume,
@@ -34,7 +34,7 @@ struct ZfsNames {
 
 pub struct ZfsProvider<'a> {
     pools: &'a [String],
-    pbs: &'a Pbs,
+    backup: &'a Backup,
     run_ts: u64,
     cleanup: Cleanup,
     zfs: Arc<dyn ZfsPort>,
@@ -49,11 +49,11 @@ impl<'a> ZfsProvider<'a> {
         block: Arc<dyn BlockPort>,
         pvesh: Arc<dyn PveshPort>,
     ) -> Self {
-        let z = cfg.zfs.as_ref().expect("[zfs] missing");
+        let z = cfg.backup.sources.zfs.as_ref().expect("[zfs] missing");
 
         Self {
             pools: &z.pools,
-            pbs: &cfg.pbs,
+            backup: &cfg.backup,
             run_ts: current_epoch(),
             cleanup: Cleanup::new(zfs.clone()),
             zfs,
@@ -72,7 +72,7 @@ impl<'a> ZfsProvider<'a> {
             return Err(Reject::NotBase(orig));
         }
         let leaf = dataset_leaf(name);
-        if !self.pbs.pv_allows(leaf) {
+        if !self.backup.pv_allows(leaf) {
             return Err(Reject::PvDenied(leaf));
         }
         Ok(())
@@ -119,17 +119,17 @@ impl<'a> Provider for ZfsProvider<'a> {
                         });
                     }
                     Err(Reject::NotBase(orig)) => {
-                        log::trace!("skip {}: origin != '-' (origin='{}')", &name, orig)
+                        tracing::debug!("skip {}: origin != '-' (origin='{}')", &name, orig)
                     }
                     Err(Reject::PvDenied(leaf)) => {
-                        log::trace!("skip {}: pv_allows(false) for leaf '{}'", &name, leaf)
+                        tracing::debug!("skip {}: pv_allows(false) for leaf '{}'", &name, leaf)
                     }
                 }
             }
         }
 
         if out.is_empty() {
-            log::debug!("zfs: no candidate volumes");
+            tracing::debug!("zfs: no candidate volumes");
         }
 
         Ok(out)
@@ -188,7 +188,7 @@ impl Drop for Cleanup {
         if let Some(zfs) = &self.zfs {
             for s in self.tasks.drain(..) {
                 if let Err(e) = zfs.destroy_recursive(&s) {
-                    log::warn!("[cleanup] zfs destroy -r {} failed: {e}", s);
+                    tracing::warn!("[cleanup] zfs destroy -r {} failed: {e}", s);
                 }
             }
         }
@@ -230,7 +230,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::{Config, Pbs, Zfs},
+        config::{Backup, BackupSources, BackupTarget, Config, Pbs, Restore, Zfs},
         tooling::{BlockPort, ZfsPort, zfs::ZfsVolume},
         utils::process::ProcessRunner,
     };
@@ -301,15 +301,20 @@ mod tests {
                 password: None,
                 ns: None,
                 backup_id: "test".to_string(),
+            },
+            backup: Backup {
+                sources: BackupSources {
+                    zfs: Some(Zfs {
+                        pools: vec!["tank".to_string()],
+                    }),
+                    lvmthin: None,
+                },
+                target: BackupTarget { repo: None },
                 pv_prefixes: vec!["vm-".to_string()],
                 pv_exclude_re: None,
                 pv_exclude_re_src: None,
             },
-            zfs: Some(Zfs {
-                pools: vec!["tank".to_string()],
-                restore: None,
-            }),
-            lvmthin: None,
+            restore: Restore::default(),
         }
     }
 

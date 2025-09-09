@@ -1,9 +1,14 @@
 pub mod lvmthin;
 pub mod zfs;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 
-use crate::{AppCtx, tooling::PbsSnapshot, volume::Volume};
+use crate::{
+    AppCtx, commands::restore::matcher::RestoreMatcher, config::RestoreTarget,
+    tooling::pbs::PbsSnapshot, volume::Volume,
+};
 
 pub trait Provider {
     fn name(&self) -> &'static str;
@@ -14,35 +19,54 @@ pub trait Provider {
 pub struct ProviderRegistry<'a> {
     ctx: &'a AppCtx,
     snapshot: Option<&'a PbsSnapshot>,
+    matcher: Arc<RestoreMatcher>,
 }
 
 impl<'a> ProviderRegistry<'a> {
     pub fn new(ctx: &'a AppCtx, snapshot: Option<&'a PbsSnapshot>) -> Self {
-        Self { ctx, snapshot }
+        let matcher = Arc::new(RestoreMatcher::new(&ctx.cfg).expect("restore matcher"));
+        Self {
+            ctx,
+            snapshot,
+            matcher,
+        }
     }
 
     pub fn build(&self) -> Vec<Box<dyn Provider + 'a>> {
         let mut out: Vec<Box<dyn Provider + 'a>> = Vec::new();
-        let cfg = &self.ctx.cfg;
-
-        if cfg.zfs.is_some() {
-            let zfs_port = self.ctx.tools.zfs().expect("zfs enabled");
-            out.push(Box::new(zfs::ZfsRestore::new(
-                cfg,
-                self.snapshot,
-                zfs_port,
-                self.ctx.tools.pvesh(),
-                self.ctx.tools.fs(),
-            )));
-        }
-        if cfg.lvmthin.is_some() {
-            let lvm_port = self.ctx.tools.lvm().expect("lvm enabled");
-            out.push(Box::new(lvmthin::LvmthinRestore::new(
-                cfg,
-                self.snapshot,
-                lvm_port,
-                self.ctx.tools.pvesh(),
-            )));
+        for (tname, tgt) in &self.ctx.cfg.restore.targets {
+            match tgt {
+                RestoreTarget::Zfs { root } => {
+                    let zfs_port = self.ctx.tools.zfs().expect("zfs enabled");
+                    let pvesh = self.ctx.tools.pvesh();
+                    let fs = self.ctx.tools.fs();
+                    out.push(Box::new(zfs::ZfsRestore::new(
+                        self.snapshot,
+                        zfs_port,
+                        pvesh,
+                        fs,
+                        self.matcher.clone(),
+                        root.clone(),
+                        tname.clone(),
+                    )));
+                }
+                RestoreTarget::LvmThin { vg, thinpool } => {
+                    let lvm_port = self.ctx.tools.lvm().expect("lvm enabled");
+                    let pvesh = self.ctx.tools.pvesh();
+                    let tp = thinpool
+                        .clone()
+                        .expect("[lvmthin target] thinpool is required");
+                    out.push(Box::new(lvmthin::LvmthinRestore::new(
+                        self.snapshot,
+                        lvm_port,
+                        pvesh,
+                        self.matcher.clone(),
+                        vg.clone(),
+                        tp,
+                        tname.clone(),
+                    )));
+                }
+            }
         }
 
         out
