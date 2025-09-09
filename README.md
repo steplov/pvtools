@@ -3,10 +3,46 @@
 ![Build Status](https://github.com/steplov/pvtools/workflows/CI/badge.svg)
 ![Latest Release](https://img.shields.io/github/v/release/steplov/pvtools)
 ![Downloads](https://img.shields.io/github/downloads/steplov/pvtools/total)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 ## What is pvtools?
 
 pvtools is a command-line utility that simplifies backup and restore operations for Proxmox virtual machine disks stored on ZFS and LVM-thin storage backends. It integrates seamlessly with Proxmox Backup Server (PBS) and is particularly valuable for managing dynamically created volumes in Kubernetes environments using the Proxmox CSI plugin.
+
+## Installation
+
+### Download Pre-built Binary
+1. Go to the [Releases](https://github.com/steplov/pvtools/releases) page
+2. Download the latest release archive for your platform
+3. Extract and install:
+```bash
+tar -xzf pvtools-v1.0.0-linux-x64.tar.gz
+sudo mv pvtools /usr/local/bin/
+cp config.example.toml config.toml
+```
+
+### Prerequisites
+- Proxmox VE node with PBS access
+- `proxmox-backup-client` installed and configured
+- ZFS and/or LVM-thin tools (`zfs`, `lvcreate`, etc.)
+- Appropriate permissions for volume operations
+
+## Quick Start
+
+1. **Configure** by editing the included example:
+   ```bash
+   cp config.example.toml config.toml
+   # Edit config.toml with your PBS settings and storage pools
+   ```
+2. **Test** your configuration:
+   ```bash
+   pvtools --check-config
+   ```
+3. **Run** your first backup:
+   ```bash
+   pvtools backup run --dry-run    # Preview what will be backed up
+   pvtools backup run --target nas # Actually run the backup
+   ```
 
 ## Usage
 
@@ -49,7 +85,7 @@ pvtools restore <SUBCOMMAND> [OPTIONS]
 
 **Options (for `restore run`):**
 - `--source <repo>` — Source PBS repository
-- `--snapshot <epoch|latest>` — Snapshot timestamp or `latest`
+- `--snapshot <timestamp|latest>` — Snapshot timestamp or `latest`
 - `--archive <archive>` — Restore specific archive (can be repeated)
 - `--all` — Restore all archives in snapshot
 - `--dry-run` — Show what would be restored
@@ -63,28 +99,21 @@ pvtools restore list-snapshots --source nas
 pvtools restore list-archives --source nas --snapshot latest
 
 # Restore all archives from latest snapshot
-pvtools restore run --source nas --snapshot latest --all
+pvtools restore run --source nas --all
 
 # Restore specific archive from snapshot at given time
-pvtools restore run --source nas --snapshot 1735689600 --archive vm-9999-disk-data.raw
+pvtools restore run --source nas --snapshot 2025-09-04T20:25:16Z --archive vm-9999-disk-data.raw
 
 # Dry run restore plan
 pvtools restore run --source nas --snapshot latest --all --dry-run
 ```
 
-### Configuration
-
-```bash
-# Validate configuration
-pvtools --check-config
-
-# Print parsed configuration
-pvtools --print-config
-```
-
 ## Configuration
 
-Create `config.toml`:
+pvtools uses a TOML configuration file. An example configuration (`config.example.toml`) is included with each release.
+
+<details>
+<summary>Click to view full configuration example</summary>
 
 ```toml
 # =========================
@@ -169,9 +198,23 @@ target = "lvm_pve"
 [restore]
 default_target = "zfs_pv"
 ```
+</details>
 
-## Requirements
+## PBS Authentication & Permissions
 
-- `proxmox-backup-client` in PATH
-- ZFS and/or LVM-thin tools (`zfs`, `lvcreate`, etc.)
-- Appropriate permissions for volume operations
+`pvtools` uses a PBS API token **scoped to a specific datastore** (not server-wide).
+
+**Required permissions:**
+- **Minimum for existing namespaces:** grant the token **DatastoreBackup** + **DatastoreReader** on that datastore (`/datastore/<store>`). This is enough to create/append backups and list/inspect snapshots.
+
+- **If the namespace may not exist yet:** the token must also have **`Datastore.Modify`** on that datastore to create namespaces. The simplest way is to grant **DatastoreAdmin** on `/datastore/<store>` (it includes `Datastore.Modify`).  
+  If you pre-create the namespace yourself, you can stick to the minimal roles above.
+
+**Token setup:**
+1. In PBS web interface: **Configuration** → **Access Control** → **API Tokens**
+2. Create token with appropriate permissions for your datastore
+3. Save the secret to a file (referenced in `config.toml` as `password_file`)
+
+## License
+
+This project is licensed under the MIT License

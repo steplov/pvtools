@@ -53,7 +53,7 @@ jobs:
       - name: Prepare release artifacts
         run: |
           mkdir release
-          cp target/release/pvtools release/pvtools-linux-x86_64
+          cp target/release/pvtools release/pvtools
           cp examples/config.example.toml release/
 
       - name: Create archive
