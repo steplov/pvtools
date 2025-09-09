@@ -64,13 +64,8 @@ pub struct Restore {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RestoreTarget {
-    Zfs {
-        root: String,
-    },
-    LvmThin {
-        vg: String,
-        thinpool: String,
-    },
+    Zfs { root: String },
+    LvmThin { vg: String, thinpool: String },
 }
 
 impl fmt::Display for RestoreTarget {
