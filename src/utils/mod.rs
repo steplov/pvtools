@@ -45,6 +45,7 @@ pub mod naming {
 
     use anyhow::{Result, anyhow, bail};
 
+    const NO_EXT_SENTINEL: &str = "noext";
     pub fn create_archive_name(provider: &str, leaf: &str, id: &str) -> Result<String> {
         let path = Path::new(leaf);
 
@@ -55,8 +56,8 @@ pub mod naming {
 
         let ext = path
             .extension()
-            .ok_or_else(|| anyhow!("invalid leaf, no extension: {leaf}"))?
-            .to_string_lossy();
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_else(|| NO_EXT_SENTINEL.to_string());
 
         Ok(format!("{provider}_{stem}_{ext}_{id}.img"))
     }
@@ -80,7 +81,12 @@ pub mod naming {
         let ext = parts[parts.len() - 2];
         let stem = parts[1..parts.len() - 2].join("_");
 
-        let leaf = format!("{stem}.{ext}");
+        let leaf = if ext == NO_EXT_SENTINEL {
+            stem
+        } else {
+            format!("{stem}.{ext}")
+        };
+
         Ok((provider, leaf, id))
     }
 
@@ -129,6 +135,27 @@ pub mod naming {
             assert_eq!(prov, "zfs");
             assert_eq!(leaf, "vm-1000-data.raw");
             assert_eq!(id, "12345678");
+        }
+        #[test]
+        fn roundtrip_no_extension() {
+            let archive = create_archive_name("zfs", "vm-42", "deadbeef").unwrap();
+            assert_eq!(archive, "zfs_vm-42_noext_deadbeef.img");
+
+            let (prov, leaf, id) = parse_archive_name(&archive).unwrap();
+            assert_eq!(prov, "zfs");
+            assert_eq!(leaf, "vm-42");
+            assert_eq!(id, "deadbeef");
+        }
+
+        #[test]
+        fn roundtrip_with_underscores_in_leaf() {
+            let archive = create_archive_name("zfs", "vm_100-backup.v1.raw", "abcd1234").unwrap();
+            assert_eq!(archive, "zfs_vm_100-backup.v1_raw_abcd1234.img");
+
+            let (prov, leaf, id) = parse_archive_name(&archive).unwrap();
+            assert_eq!(prov, "zfs");
+            assert_eq!(leaf, "vm_100-backup.v1.raw");
+            assert_eq!(id, "abcd1234");
         }
     }
 }
